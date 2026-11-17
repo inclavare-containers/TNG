@@ -80,6 +80,17 @@ cfg := &tng.Config{
 }
 ```
 
+### rats-TLS 加密
+
+```go
+cfg := &tng.Config{
+    RatsTls: map[string]any{}, // uses default rats-TLS settings
+    NoRA:    true,
+}
+```
+
+> **注意**：`OHttp` 和 `RatsTls` 互斥，只能设置其中一个。
+
 ### 为非 TNG URL 设置回退
 
 ```go
