@@ -58,6 +58,8 @@ pub(super) async fn load_policy(policy: &PolicyConfig) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::test_harness::eval_policy_vector;
+
     use super::super::policy_config::{ModuleEntryConfig, ModuleGroupsConfig};
     use super::*;
 
@@ -216,5 +218,70 @@ default file_system := 2"#;
             .await
             .expect_err("non-UTF-8 inline policy must fail");
         assert!(err.to_string().contains("UTF-8"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn test_rego_hardware_only_recognizes_known_tees() {
+        let policy = include_str!("static/hardware_only.rego");
+
+        // TDX with the canonical Intel quoting-enclave vendor_id -> all affirming.
+        let tdx = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"}}}}"#;
+        assert_eq!(eval_policy_vector(policy, tdx).await, (2, 2, 2, 2));
+
+        // Hygon CSV v2.
+        let csv = r#"{"csv":{"version":"2"}}"#;
+        assert_eq!(eval_policy_vector(policy, csv).await, (2, 2, 2, 2));
+
+        // TPM and generic SYSTEM attesters.
+        let tpm = r#"{"tpm":{"firmware_version":"1.0"}}"#;
+        assert_eq!(eval_policy_vector(policy, tpm).await, (2, 2, 2, 2));
+        let system = r#"{"system":{}}"#;
+        assert_eq!(eval_policy_vector(policy, system).await, (2, 2, 2, 2));
+    }
+
+    #[tokio::test]
+    async fn test_rego_hardware_only_rejects_unrecognized_hardware() {
+        let policy = include_str!("static/hardware_only.rego");
+
+        // A valid TDX tee_type but a WRONG vendor_id: hardware must stay at its
+        // "unrecognized" default (97 -> Contraindicated), while the other three
+        // dimensions remain affirming. This pins the exact canonical vendor_id.
+        let tdx_bad_vendor = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"}}}}"#;
+        assert_eq!(
+            eval_policy_vector(policy, tdx_bad_vendor).await,
+            (2, 97, 2, 2)
+        );
+
+        // No TEE evidence at all -> hardware stays unrecognized.
+        assert_eq!(eval_policy_vector(policy, "{}").await, (2, 97, 2, 2));
+    }
+
+    #[tokio::test]
+    async fn test_rego_hardware_only_strict_requires_non_debug_tdx_eventlog() {
+        let policy = include_str!("static/hardware_only_strict.rego");
+
+        let valid_tdx = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"},"body":{"td_attributes":"0000001000000080"}},"uefi_event_logs":[{"event":"ok"}]}}"#;
+        assert_eq!(eval_policy_vector(policy, valid_tdx).await, (2, 2, 2, 2));
+
+        let debug_tdx = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"},"body":{"td_attributes":"0100001000000080"}},"uefi_event_logs":[{"event":"ok"}]}}"#;
+        assert_eq!(eval_policy_vector(policy, debug_tdx).await, (2, 97, 2, 2));
+
+        let missing_eventlog = r#"{"tdx":{"quote":{"header":{"tee_type":"81000000","vendor_id":"939a7233f79c4ca9940a0db3957f0607"},"body":{"td_attributes":"0000001000000080"}}}}"#;
+        assert_eq!(
+            eval_policy_vector(policy, missing_eventlog).await,
+            (2, 97, 2, 2)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rego_trust_all_affirms_everything() {
+        let policy = include_str!("static/trust_all.rego");
+
+        // trust_all affirms every dimension regardless of input, even with no
+        // TEE evidence and an unrecognized vendor_id.
+        assert_eq!(eval_policy_vector(policy, "{}").await, (2, 2, 2, 2));
+        let bad_tdx =
+            r#"{"tdx":{"quote":{"header":{"tee_type":"00000000","vendor_id":"deadbeef"}}}}"#;
+        assert_eq!(eval_policy_vector(policy, bad_tdx).await, (2, 2, 2, 2));
     }
 }

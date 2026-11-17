@@ -468,6 +468,30 @@ fn resolve_publisher_key(
 #[cfg(test)]
 #[cfg(feature = "crypto-rustcrypto")]
 mod tests {
+    use super::super::super::policies::load_policy;
+    use super::super::super::policies::test_harness::eval_policy_vector;
+    use super::super::super::policy_config::PolicyConfig;
+    use super::super::super::test_fixtures::{
+        aael_event, artifact_entry_value, cmaas_tdx_input,
+        resolve_response_body as fixture_resolve_response_body, tdx_input, transparency_entry,
+        CMAAS_EVIDENCE_WITH_REKOR_V1_TRANSPARENCY_JSON,
+    };
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine as _;
+    use serde_json::{json, Value};
+
+    /// Render a single-artifact-server-entry policy. An artifact-server primary
+    /// does no I/O at load time, so this needs no resolved rekor data.
+    async fn render_policy(value: serde_json::Value) -> String {
+        let cfg: PolicyConfig = serde_json::from_value(json!({
+            "type": "modules",
+            "modules": [transparency_entry(value)],
+        }))
+        .expect("parse cfg");
+        let encoded = load_policy(&cfg).await.expect("policy");
+        String::from_utf8(URL_SAFE_NO_PAD.decode(&encoded).unwrap()).unwrap()
+    }
+
     use super::*;
     use crate::tee::coco::converter::builtin::policies::test_harness::invoke_extension;
     use crate::tee::coco::converter::builtin::test_fixtures::{
@@ -1476,5 +1500,400 @@ mod tests {
         ]);
         let r = invoke_extension(&hv, arg).await;
         assert_eq!(r, regorus::Value::from("ok"));
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_artifact_server_primary_and_fallback() {
+        let (manifest, log_entry, entry_url, log_index) = cmaas_transparency_tuple();
+        let input = cmaas_tdx_input(&manifest);
+        let resolve_body = fixture_resolve_response_body(&manifest, &log_entry, &entry_url);
+        let rekor_body = rekor_entries_body(&log_entry);
+
+        // Primary success; the fallback points at a dead port and must not be
+        // consulted.
+        {
+            let server = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("POST"))
+                .and(wiremock::matchers::path("/api/v1/transparency/resolve"))
+                .respond_with(
+                    wiremock::ResponseTemplate::new(200).set_body_string(resolve_body.clone()),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            let policy =
+                build_branch_b_policy(&server.uri(), &entry_url, "http://127.0.0.1:1", log_index)
+                    .await;
+            let vec = eval_policy_vector(&policy, &input).await;
+            assert_eq!(
+                vec.0, 2,
+                "primary success must affirm executables (got {vec:?})"
+            );
+        }
+
+        // Artifact-server 500; the fallback rekor mock serves the fixture
+        // entry and authenticates it.
+        {
+            let as_server = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("POST"))
+                .and(wiremock::matchers::path("/api/v1/transparency/resolve"))
+                .respond_with(
+                    wiremock::ResponseTemplate::new(500).set_body_string("upstream error"),
+                )
+                .mount(&as_server)
+                .await;
+            let rekor_server = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path("/api/v1/log/entries"))
+                .and(wiremock::matchers::query_param(
+                    "logIndex",
+                    log_index.to_string(),
+                ))
+                .respond_with(
+                    wiremock::ResponseTemplate::new(200).set_body_string(rekor_body.clone()),
+                )
+                .expect(1)
+                .mount(&rekor_server)
+                .await;
+            let policy =
+                build_branch_b_policy(&as_server.uri(), &entry_url, &rekor_server.uri(), log_index)
+                    .await;
+            let vec = eval_policy_vector(&policy, &input).await;
+            assert_eq!(
+                vec.0, 2,
+                "fallback success must affirm executables (got {vec:?})"
+            );
+        }
+
+        // Both fail -> executables stays at its contraindicated default.
+        {
+            let as_server = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("POST"))
+                .and(wiremock::matchers::path("/api/v1/transparency/resolve"))
+                .respond_with(
+                    wiremock::ResponseTemplate::new(500).set_body_string("upstream error"),
+                )
+                .mount(&as_server)
+                .await;
+            let rekor_server = wiremock::MockServer::start().await;
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path("/api/v1/log/entries"))
+                .and(wiremock::matchers::query_param(
+                    "logIndex",
+                    log_index.to_string(),
+                ))
+                .respond_with(wiremock::ResponseTemplate::new(500).set_body_string("rekor down"))
+                .mount(&rekor_server)
+                .await;
+            let policy =
+                build_branch_b_policy(&as_server.uri(), &entry_url, &rekor_server.uri(), log_index)
+                    .await;
+            let vec = eval_policy_vector(&policy, &input).await;
+            assert_eq!(vec.0, 97, "both-fail must deny executables (got {vec:?})");
+        }
+    }
+
+    /// Red-green regression for the artifact-server primary: a declared type
+    /// the evidence does not carry leaves the full manifest undefined, which
+    /// must map to `"fail"` and, with no fallback, reject. The mock would
+    /// happily resolve the fixture manifest, so an array comprehension that
+    /// dropped the undefined type would shrink the manifest to exactly that
+    /// fixture, reach the mock, and affirm.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_artifact_server_rejects_declared_type_missing() {
+        let (manifest, log_entry, entry_url, _log_index) = cmaas_transparency_tuple();
+        let input = cmaas_tdx_input(&manifest);
+        let resolve_body = fixture_resolve_response_body(&manifest, &log_entry, &entry_url);
+
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/v1/transparency/resolve"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(resolve_body))
+            .expect(0) // the undefined full manifest must never reach the resolve call
+            .mount(&server)
+            .await;
+
+        let value = json!({
+            "publishedMeasurements": ["tdx.kernel", "container.image.cmaas-runtime"],
+            "schemaVersion": "1.0.0",
+            "services": [{
+                "type": "artifact-server",
+                "url": server.uri(),
+                "logServices": [{"type": "rekor-v1", "url": entry_url}],
+            }],
+        });
+        let policy = render_policy(value).await;
+
+        // The evidence carries only the image measurement, so tdx.kernel is
+        // undefined and the full manifest with it.
+        assert_eq!(
+            eval_policy_vector(&policy, &input).await,
+            (97, 2, 2, 2),
+            "a declared type missing from the evidence must reject the primary"
+        );
+        server.verify().await;
+    }
+
+    /// With no fallback baseline configured, a missing rootfs measurement
+    /// fails the entry. The fallback is the only alternative path; without
+    /// one, the primary failure is final.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_artifact_server_rootfs_missing_without_fallback_rejects() {
+        let (manifest, log_entry, entry_url, _log_index) = cmaas_transparency_tuple();
+        let input = cmaas_tdx_input(&manifest);
+        let resolve_body = fixture_resolve_response_body(&manifest, &log_entry, &entry_url);
+
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/v1/transparency/resolve"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(resolve_body))
+            .expect(0) // the undefined full manifest must never reach the resolve call
+            .mount(&server)
+            .await;
+
+        let value = json!({
+            "publishedMeasurements": ["container.image.cmaas-runtime", "rootfs.cc"],
+            "schemaVersion": "1.0.0",
+            "services": [{
+                "type": "artifact-server",
+                "url": server.uri(),
+                "logServices": [{"type": "rekor-v1", "url": entry_url}],
+            }],
+        });
+        let policy = render_policy(value).await;
+        // The evidence carries the image but no td_payload_info event, so the
+        // full manifest is undefined and there is no fallback to consult.
+        assert_eq!(
+            eval_policy_vector(&policy, &input).await,
+            (97, 2, 2, 97),
+            "a missing rootfs measurement without a fallback must reject both dimensions"
+        );
+        server.verify().await;
+    }
+
+    /// A primary manifest that cannot be constructed maps to `"fail"`, so the
+    /// complete fallback baseline is still consulted and can pass.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_artifact_server_missing_primary_measurement_uses_fallback() {
+        let (manifest, log_entry, _entry_url, log_index) = cmaas_transparency_tuple();
+        let input = cmaas_tdx_input(&manifest);
+        let rekor_body = rekor_entries_body(&log_entry);
+
+        let rekor_server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/v1/log/entries"))
+            .and(wiremock::matchers::query_param(
+                "logIndex",
+                log_index.to_string(),
+            ))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(rekor_body))
+            .expect(1)
+            .mount(&rekor_server)
+            .await;
+
+        let value = json!({
+            // The primary declares tdx.kernel, which the evidence lacks.
+            "publishedMeasurements": ["tdx.kernel", "container.image.cmaas-runtime"],
+            "schemaVersion": "1.0.0",
+            "services": [{
+                "type": "artifact-server",
+                "url": "http://127.0.0.1:1",
+                "logServices": [{"type": "rekor-v1", "url": "https://rekor.sigstore.dev"}],
+            }],
+            // The fallback declares the complete smaller baseline.
+            "fallbackPublishedMeasurements": ["container.image.cmaas-runtime"],
+            "fallbackServices": [{
+                "type": "rekor-v1",
+                "logUrl": rekor_server.uri(),
+                "logIndex": log_index,
+            }],
+        });
+        let policy = render_policy(value).await;
+        let vec = eval_policy_vector(&policy, &input).await;
+        assert_eq!(
+            vec.0, 2,
+            "a fail primary must consult the complete fallback baseline (got {vec:?})"
+        );
+        rekor_server.verify().await;
+    }
+
+    /// The fallback's own manifest is a literal too: when
+    /// `fallbackPublishedMeasurements` names a type the evidence lacks, the
+    /// fallback manifest is undefined and no rekor query is made.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_artifact_server_incomplete_fallback_rejects() {
+        let (manifest, log_entry, _entry_url, log_index) = cmaas_transparency_tuple();
+        let input = cmaas_tdx_input(&manifest);
+        let rekor_body = rekor_entries_body(&log_entry);
+
+        let rekor_server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/v1/log/entries"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(rekor_body))
+            .expect(0)
+            .mount(&rekor_server)
+            .await;
+
+        let value = json!({
+            "publishedMeasurements": ["tdx.kernel", "container.image.cmaas-runtime"],
+            "schemaVersion": "1.0.0",
+            "services": [{
+                "type": "artifact-server",
+                "url": "http://127.0.0.1:1",
+                "logServices": [{"type": "rekor-v1", "url": "https://rekor.sigstore.dev"}],
+            }],
+            // tdx.kernel is declared but absent from the evidence, so the
+            // fallback manifest is undefined as well.
+            "fallbackPublishedMeasurements": ["tdx.kernel"],
+            "fallbackServices": [{
+                "type": "rekor-v1",
+                "logUrl": rekor_server.uri(),
+                "logIndex": log_index,
+            }],
+        });
+        let policy = render_policy(value).await;
+        let vec = eval_policy_vector(&policy, &input).await;
+        assert_eq!(
+            vec.0, 97,
+            "an incomplete fallback manifest must reject without a rekor query (got {vec:?})"
+        );
+        rekor_server.verify().await;
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_artifact_server_revoked_skips_fallback() {
+        let (manifest, log_entry, entry_url, log_index) = cmaas_transparency_tuple();
+        let input = cmaas_tdx_input(&manifest);
+        let rekor_body = rekor_entries_body(&log_entry);
+
+        let as_server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/v1/transparency/resolve"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(403).set_body_string(
+                    json!({
+                        "error_code": "measurement_revoked",
+                        "error_message": "the measurement was revoked",
+                        "request_id": "test-req-3"
+                    })
+                    .to_string(),
+                ),
+            )
+            .mount(&as_server)
+            .await;
+        let rekor_server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/v1/log/entries"))
+            .and(wiremock::matchers::query_param(
+                "logIndex",
+                log_index.to_string(),
+            ))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(rekor_body))
+            .expect(0) // a revoked primary must never reach the fallback
+            .mount(&rekor_server)
+            .await;
+        let policy =
+            build_branch_b_policy(&as_server.uri(), &entry_url, &rekor_server.uri(), log_index)
+                .await;
+        let vec = eval_policy_vector(&policy, &input).await;
+        assert_eq!(
+            vec.0, 97,
+            "a revoked measurement must deny executables without consulting the rekor fallback (got {vec:?})"
+        );
+        rekor_server.verify().await;
+    }
+
+    /// When the primary resolves successfully, regorus must not evaluate the
+    /// fallback network call. A raw TCP listener makes an eager call
+    /// observable.
+    // Test-only spawn: the wasm-safety rule behind the disallowed list does
+    // not apply to a host-only tokio test.
+    #[allow(clippy::disallowed_methods)]
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_artifact_server_does_not_call_fallback_when_primary_ok() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let fallback_addr = listener.local_addr().unwrap();
+        let fallback_called = Arc::new(AtomicBool::new(false));
+        let called_clone = fallback_called.clone();
+        tokio::spawn(async move {
+            for _ in 0..4 {
+                if listener.accept().await.is_ok() {
+                    called_clone.store(true, Ordering::SeqCst);
+                }
+            }
+        });
+
+        let evidence: Value =
+            serde_json::from_str(CMAAS_EVIDENCE_WITH_REKOR_V1_TRANSPARENCY_JSON).unwrap();
+        let manifest = evidence["transparency"]["release_manifest"].clone();
+        let log_entry = evidence["transparency"]["log_entries"][0]["log_entry"].clone();
+        let entry_url = evidence["transparency"]["log_entries"][0]["url"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let resolve_body = fixture_resolve_response_body(&manifest, &log_entry, &entry_url);
+
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/v1/transparency/resolve"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(resolve_body))
+            .mount(&server)
+            .await;
+
+        let cfg_json = json!({
+            "type": "modules",
+            "modules": [transparency_entry(artifact_entry_value(
+                &server.uri(),
+                &entry_url,
+                Some((&format!("http://{}", fallback_addr), 42)),
+            ))],
+        });
+        let cfg: PolicyConfig = serde_json::from_value(cfg_json).unwrap();
+        let encoded = load_policy(&cfg).await.unwrap();
+        let policy = String::from_utf8(URL_SAFE_NO_PAD.decode(&encoded).unwrap()).unwrap();
+
+        let digest = manifest["measurements"][0]["value"]
+            .as_str()
+            .expect("fixture manifest measurement value");
+        let input = tdx_input(&[aael_event(digest)]);
+
+        let vec = eval_policy_vector(&policy, &input).await;
+        assert_eq!(vec.0, 2, "primary_ok must affirm executables (got {vec:?})");
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            !fallback_called.load(Ordering::SeqCst),
+            "tng.fetch_rekor_on_demand must NOT be called when primary_ok is true"
+        );
+    }
+
+    async fn build_branch_b_policy(
+        artifact_url: &str,
+        entry_url: &str,
+        fallback_log_url: &str,
+        fallback_log_index: i64,
+    ) -> String {
+        let cfg_json = json!({
+            "type": "modules",
+            "modules": [transparency_entry(artifact_entry_value(
+                artifact_url,
+                entry_url,
+                Some((fallback_log_url, fallback_log_index)),
+            ))],
+        });
+        let cfg: PolicyConfig = serde_json::from_value(cfg_json).expect("parse cfg");
+        let encoded = load_policy(&cfg).await.expect("policy");
+        String::from_utf8(URL_SAFE_NO_PAD.decode(&encoded).unwrap()).unwrap()
     }
 }

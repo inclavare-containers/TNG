@@ -794,6 +794,15 @@ fn iso_date_to_epoch_secs(date: &str) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "crypto-rustcrypto")]
+    use super::super::super::test_fixtures::{
+        aael_event, manifest, rekor_entry_value, tdx_quote_input, transparency_entry, TDX_VENDOR_ID,
+    };
+    #[cfg(feature = "crypto-rustcrypto")]
+    use super::super::test_harness::{
+        render_modules_json as render, render_rekor, resolved_from_manifest,
+    };
+
     use super::super::test_harness::eval_policy_vector;
     use super::*;
     use crate::tee::coco::converter::builtin::converter::BuiltinCocoConverter;
@@ -2675,6 +2684,160 @@ mod tests {
             eval_modules(&bad_kernel_cfg, &input).await,
             (97, 2, 2, 2),
             "a tampered kernel digest must reject executables"
+        );
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_hardware_is_platform_recognition_only() {
+        let mr_td = hex96('a');
+        let logged = manifest("1.0.0", &[("tdx.td-shim", mr_td.as_str())]);
+        let policy = render_rekor(&["tdx.td-shim"], &resolved_from_manifest(&logged));
+
+        let ok = tdx_quote_input(Some(mr_td.as_str()), "0000001000000000", &[]);
+        assert_eq!(eval_policy_vector(&policy, &ok).await, (2, 2, 2, 2));
+
+        // The old platform scoring is gone: hardware depends on recognition
+        // alone, so the debug bit does not affect it. Add a `tdx` entry to
+        // enforce the strict posture.
+        let debug = tdx_quote_input(Some(mr_td.as_str()), "0100001000000000", &[]);
+        assert_eq!(
+            eval_policy_vector(&policy, &debug).await,
+            (2, 2, 2, 2),
+            "transparency_log alone must not gate the hardware debug bit"
+        );
+
+        let bad_vendor = ok.replace(TDX_VENDOR_ID, &"0".repeat(32));
+        assert_eq!(
+            eval_policy_vector(&policy, &bad_vendor).await,
+            (2, 97, 2, 2),
+            "a wrong TDX vendor id must reject hardware while executables still passes"
+        );
+
+        assert_eq!(
+            eval_policy_vector(&policy, "{}").await,
+            (97, 97, 2, 2),
+            "no evidence must leave executables and hardware non-affirming"
+        );
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_with_tdx_entry_enforces_posture() {
+        let mr_td = hex96('a');
+        let logged = manifest("1.0.0", &[("tdx.td-shim", mr_td.as_str())]);
+        let resolved = [Some(resolved_from_manifest(&logged))];
+        let policy = render(
+            json!([
+                transparency_entry(rekor_entry_value(&["tdx.td-shim"], 1)),
+                {"type": "tdx", "value": {}},
+            ]),
+            &resolved,
+        );
+
+        let event = json!({"event": "ok"});
+        let ok = tdx_quote_input(
+            Some(mr_td.as_str()),
+            "0000001000000000",
+            std::slice::from_ref(&event),
+        );
+        assert_eq!(
+            eval_policy_vector(&policy, &ok).await,
+            (2, 2, 2, 2),
+            "transparency + non-debug TDX with an event log must affirm"
+        );
+
+        let debug = tdx_quote_input(
+            Some(mr_td.as_str()),
+            "0100001000000000",
+            std::slice::from_ref(&event),
+        );
+        assert_eq!(
+            eval_policy_vector(&policy, &debug).await,
+            (2, 97, 2, 2),
+            "the tdx entry must reject a debug platform while executables still passes"
+        );
+
+        let no_eventlog = tdx_quote_input(Some(mr_td.as_str()), "0000001000000000", &[]);
+        assert_eq!(
+            eval_policy_vector(&policy, &no_eventlog).await,
+            (2, 97, 2, 2),
+            "the tdx entry must require an event log (hardware only)"
+        );
+
+        let wrong_measurement = tdx_quote_input(Some(&hex96('9')), "0000001000000000", &[event]);
+        assert_eq!(
+            eval_policy_vector(&policy, &wrong_measurement).await,
+            (97, 2, 2, 2),
+            "a measurement mismatch must reject executables while hardware still passes"
+        );
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_repeats_and_within_group_or_across_groups() {
+        let mr_td = hex96('a');
+        let digest = format!("sha256:{}", hex64('b'));
+        let manifest_a = manifest("1.0.0", &[("tdx.td-shim", mr_td.as_str())]);
+        let manifest_b = manifest(
+            "1.0.0",
+            &[("container.image.cmaas-runtime", digest.as_str())],
+        );
+        let resolved = [
+            Some(resolved_from_manifest(&manifest_a)),
+            Some(resolved_from_manifest(&manifest_b)),
+        ];
+        let entry_a = transparency_entry(rekor_entry_value(&["tdx.td-shim"], 1));
+        let entry_b = transparency_entry(rekor_entry_value(&["container.image.cmaas-runtime"], 2));
+
+        let same_group = render(json!([entry_a.clone(), entry_b.clone()]), &resolved);
+        let cross_group = render(json!([[entry_a], [entry_b]]), &resolved);
+
+        let both = tdx_quote_input(
+            Some(mr_td.as_str()),
+            "0000001000000000",
+            &[aael_event(&digest)],
+        );
+        let only_a = tdx_quote_input(Some(mr_td.as_str()), "0000001000000000", &[]);
+        let only_b = tdx_quote_input(
+            Some(&hex96('9')),
+            "0000001000000000",
+            &[aael_event(&digest)],
+        );
+        let none = tdx_quote_input(Some(&hex96('9')), "0000001000000000", &[]);
+
+        // Same group: every transparency entry must verify (AND).
+        assert_eq!(
+            eval_policy_vector(&same_group, &both).await,
+            (2, 2, 2, 2),
+            "both log-anchored baselines matching must affirm"
+        );
+        assert_eq!(
+            eval_policy_vector(&same_group, &only_a).await,
+            (97, 2, 2, 2),
+            "one of two same-group baselines failing must reject (AND)"
+        );
+        assert_eq!(
+            eval_policy_vector(&same_group, &only_b).await,
+            (97, 2, 2, 2),
+            "one of two same-group baselines failing must reject (AND)"
+        );
+
+        // Separate groups: either baseline is acceptable (OR).
+        assert_eq!(
+            eval_policy_vector(&cross_group, &only_a).await,
+            (2, 2, 2, 2),
+            "either cross-group baseline matching must affirm"
+        );
+        assert_eq!(
+            eval_policy_vector(&cross_group, &only_b).await,
+            (2, 2, 2, 2),
+            "either cross-group baseline matching must affirm"
+        );
+        assert_eq!(
+            eval_policy_vector(&cross_group, &none).await,
+            (97, 2, 2, 2),
+            "no cross-group baseline matching must reject"
         );
     }
 }

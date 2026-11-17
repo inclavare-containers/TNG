@@ -638,6 +638,18 @@ image_repo_name(ref) := name if {
 }";
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "crypto-rustcrypto")]
+    use super::super::super::super::test_fixtures::{
+        aael_event, aael_event_for_reference, hex64, hex96, manifest, pai_tdx_input,
+        rekor_entry_value, rootfs_event as rootfs_hash_event, td_payload_event, tdx_quote_input,
+        transparency_entry, TDX_VENDOR_ID,
+    };
+    #[cfg(feature = "crypto-rustcrypto")]
+    use super::super::super::test_harness::{
+        render_modules_json as render, render_rekor, resolved_from_manifest,
+    };
+    use serde_json::Value;
+
     use super::super::super::super::test_fixtures::{pai_event_log_events, tdx_input_with_body};
     use super::super::super::test_harness::eval_policy_vector;
     use super::*;
@@ -1409,6 +1421,877 @@ mod tests {
             eval_policy_vector(&bad_policy, &input).await,
             (97, 2, 2, 2),
             "a pin that differs from the real root hash must reject"
+        );
+    }
+
+    #[test]
+    fn published_measurement_type_parses_each_supported_family() {
+        use super::super::families::MeasurementFamily;
+        assert_eq!(
+            parse_published_type("tdx.td-shim").unwrap(),
+            MeasurementFamily::TdxTdShim
+        );
+        assert_eq!(
+            parse_published_type("tdx.kernel").unwrap(),
+            MeasurementFamily::TdxKernel
+        );
+        assert_eq!(
+            parse_published_type("rootfs.cc").unwrap(),
+            MeasurementFamily::RootfsCc
+        );
+        for repository_name in ["busybox", "my-app.v2"] {
+            let measurement_type = format!("container.image.{repository_name}");
+            assert_eq!(
+                parse_published_type(&measurement_type).unwrap(),
+                MeasurementFamily::ContainerImage,
+                "expected container image for {measurement_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn published_measurement_type_rejects_invalid_container_repository() {
+        for measurement_type in [
+            "container.image.",
+            "container.image.foo/bar",
+            "container.image.foo@sha256",
+            "container.image.foo:tag",
+        ] {
+            let error = parse_published_type(measurement_type).expect_err(measurement_type);
+            assert!(
+                format!("{error:#}").contains("invalid container image repository"),
+                "{measurement_type}: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn published_measurement_type_rejects_prefixed_alias() {
+        let error = parse_published_type("com.alibabacloud.container.image.busybox")
+            .expect_err("prefixed alias must be rejected");
+        assert!(
+            format!("{error:#}").contains("unsupported publishedMeasurements type"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn published_measurement_type_rejects_unsupported_type() {
+        let error = parse_published_type("tdx.uki")
+            .expect_err("tdx.uki is not a published measurement type");
+        assert!(
+            format!("{error:#}").contains("unsupported publishedMeasurements type"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn published_measurement_type_rejects_rootfs_spellings() {
+        // `rootfs.cc` is a fixed type, not a `rootfs.<name>` namespace.
+        for measurement_type in ["rootfs.foo", "rootfs."] {
+            let error =
+                parse_published_type(measurement_type).expect_err("only rootfs.cc is supported");
+            assert!(
+                format!("{error:#}").contains("unsupported publishedMeasurements type"),
+                "{measurement_type}: {error:#}"
+            );
+        }
+
+        // The vendor-prefixed spelling is not a published type; the manifest
+        // records the unprefixed one.
+        let error = parse_published_type("com.alibabacloud.rootfs.cc")
+            .expect_err("prefixed rootfs alias must be rejected");
+        assert!(
+            format!("{error:#}").contains("unsupported publishedMeasurements type"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn published_measurement_types_all_map_to_dimensions() {
+        // A published type that parses but has no extraction family would be
+        // emitted with no dimension gating it, so the entry would not be
+        // enforced. Keep the two allowlists in step.
+        for measurement_type in [
+            "tdx.td-shim",
+            "tdx.kernel",
+            "rootfs.cc",
+            "container.image.busybox",
+        ] {
+            assert!(
+                parse_published_type(measurement_type).is_ok(),
+                "{measurement_type}"
+            );
+            assert!(
+                dimension_for_published_type(measurement_type).is_some(),
+                "{measurement_type} must map to an extraction family and dimension"
+            );
+        }
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rekor_matching_and_mismatch() {
+        let digest = "sha256:d42f6e1b2aafb59383d0892824aebf5e0a2e27dad989a3fb26552a6e77e4be46";
+        let logged = manifest("1.0.0", &[("container.image.cmaas-runtime", digest)]);
+        let resolved = resolved_from_manifest(&logged);
+        let policy = render_rekor(&["container.image.cmaas-runtime"], &resolved);
+
+        let ok = tdx_input(&[aael_event(digest)]);
+        assert_eq!(
+            eval_policy_vector(&policy, &ok).await,
+            (2, 2, 2, 2),
+            "matching measurements must affirm"
+        );
+
+        let tampered = ok.replace(
+            digest,
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        );
+        assert_eq!(
+            eval_policy_vector(&policy, &tampered).await,
+            (97, 2, 2, 2),
+            "tampered digest must reject executables"
+        );
+
+        let wrong_repo = ok.replace("cmaas-runtime", "other-runtime");
+        assert_eq!(
+            eval_policy_vector(&policy, &wrong_repo).await,
+            (97, 2, 2, 2),
+            "wrong repo must reject executables"
+        );
+
+        let no_aael = tdx_input(&[]);
+        assert_eq!(
+            eval_policy_vector(&policy, &no_aael).await,
+            (97, 2, 2, 2),
+            "missing AAEL event must reject executables (fail-closed)"
+        );
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rekor_multi_digest_manifest() {
+        let digest_a = format!("sha256:{}", hex64('a'));
+        let digest_b = format!("sha256:{}", hex64('b'));
+        let digest_c = format!("sha256:{}", hex64('c'));
+        let image = "container.image.cmaas-runtime";
+
+        // The publisher records every observed digest, ascending.
+        let logged = manifest(
+            "1.0.0",
+            &[(image, digest_a.as_str()), (image, digest_b.as_str())],
+        );
+        let policy = render_rekor(&[image], &resolved_from_manifest(&logged));
+
+        let both = tdx_input(&[aael_event(&digest_a), aael_event(&digest_b)]);
+        assert_eq!(
+            eval_policy_vector(&policy, &both).await,
+            (2, 2, 2, 2),
+            "evidence with exactly the published digest set must affirm"
+        );
+
+        let missing = tdx_input(&[aael_event(&digest_a)]);
+        assert_eq!(
+            eval_policy_vector(&policy, &missing).await,
+            (97, 2, 2, 2),
+            "evidence missing one published digest must reject"
+        );
+
+        let extra = tdx_input(&[
+            aael_event(&digest_a),
+            aael_event(&digest_b),
+            aael_event(&digest_c),
+        ]);
+        assert_eq!(
+            eval_policy_vector(&policy, &extra).await,
+            (97, 2, 2, 2),
+            "evidence with an extra digest must reject"
+        );
+
+        // The publisher must write the digests ascending: an unsorted manifest
+        // reconstructs to different bytes and fails payloadHash verification.
+        let unsorted = manifest(
+            "1.0.0",
+            &[(image, digest_b.as_str()), (image, digest_a.as_str())],
+        );
+        let unsorted_policy = render_rekor(&[image], &resolved_from_manifest(&unsorted));
+        assert_eq!(
+            eval_policy_vector(&unsorted_policy, &both).await,
+            (97, 2, 2, 2),
+            "a manifest whose digests are not ascending must fail payloadHash"
+        );
+
+        // One digest remains byte-for-byte compatible with the previous
+        // single-entry reconstruction.
+        let single_logged = manifest("1.0.0", &[(image, digest_a.as_str())]);
+        let single_policy = render_rekor(&[image], &resolved_from_manifest(&single_logged));
+        let single_input = tdx_input(&[aael_event(&digest_a)]);
+        assert_eq!(
+            eval_policy_vector(&single_policy, &single_input).await,
+            (2, 2, 2, 2),
+            "a single published digest must still affirm"
+        );
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rekor_td_shim_matching_and_tamper() {
+        let mr_td = "321ab9904f6ca6de72a3163b02143624600dbc368fdfd1d9adffd5f97b8b95a74a1e5975a9df5a3471849bd6f9b83fec";
+        let logged = manifest("1.0.0", &[("tdx.td-shim", mr_td)]);
+        let policy = render_rekor(&["tdx.td-shim"], &resolved_from_manifest(&logged));
+
+        let ok = tdx_quote_input(Some(mr_td), "0000001000000000", &[]);
+        assert_eq!(
+            eval_policy_vector(&policy, &ok).await,
+            (2, 2, 2, 2),
+            "matching td-shim mr_td must affirm"
+        );
+
+        let tampered = "421ab9904f6ca6de72a3163b02143624600dbc368fdfd1d9adffd5f97b8b95a74a1e5975a9df5a3471849bd6f9b83fec";
+        let bad = ok.replace(mr_td, tampered);
+        assert_eq!(
+            eval_policy_vector(&policy, &bad).await,
+            (97, 2, 2, 2),
+            "tampered td-shim mr_td must reject executables"
+        );
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rekor_td_kernel_matching_and_tamper() {
+        let kernel = "a1b2c3d4e5f60718293a4b5c6d7e8f900102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+        let event_32mib = "C3RkX3BheWxvYWQAAAAAAAAAAAAAAAACAAAAAA==";
+        let logged = manifest("1.0.0", &[("tdx.kernel", kernel)]);
+        let policy = render_rekor(&["tdx.kernel"], &resolved_from_manifest(&logged));
+
+        let ok = tdx_input(&[td_payload_event(event_32mib, kernel, 2)]);
+        assert_eq!(
+            eval_policy_vector(&policy, &ok).await,
+            (2, 2, 2, 2),
+            "matching td_payload digest + 32 MiB blob must affirm"
+        );
+
+        let tampered = "b1b2c3d4e5f60718293a4b5c6d7e8f900102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+        let bad = ok.replace(kernel, tampered);
+        assert_eq!(
+            eval_policy_vector(&policy, &bad).await,
+            (97, 2, 2, 2),
+            "tampered td_payload digest must reject executables"
+        );
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rekor_td_kernel_descriptor_must_be_exact() {
+        let kernel = "a1b2c3d4e5f60718293a4b5c6d7e8f900102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+        let event_32mib = "C3RkX3BheWxvYWQAAAAAAAAAAAAAAAACAAAAAA==";
+        let logged = manifest("1.0.0", &[("tdx.kernel", kernel)]);
+        let policy = render_rekor(&["tdx.kernel"], &resolved_from_manifest(&logged));
+
+        let exact = tdx_input(&[td_payload_event(event_32mib, kernel, 2)]);
+        assert_eq!(
+            eval_policy_vector(&policy, &exact).await,
+            (2, 2, 2, 2),
+            "exact td_payload descriptor must affirm"
+        );
+
+        // A prefix-only descriptor must not match the exact comparison.
+        let prefixed = serde_json::to_string(&json!({
+            "tdx": {
+                "quote": {
+                    "header": {"tee_type": "81000000", "vendor_id": TDX_VENDOR_ID},
+                    "body": {"td_attributes": "0000001000000000"},
+                },
+                "uefi_event_logs": [{
+                    "type_name": "EV_EFI_PLATFORM_FIRMWARE_BLOB2",
+                    "details": {"string": "td_payload_extra"},
+                    "event": event_32mib,
+                    "digests": [{"alg": "SHA-384", "digest": kernel}],
+                    "index": 2,
+                }],
+            }
+        }))
+        .expect("serialize input");
+        assert_eq!(
+            eval_policy_vector(&policy, &prefixed).await,
+            (97, 2, 2, 2),
+            "prefix-only td_payload_* descriptor must reject (exact match required)"
+        );
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rekor_td_kernel_accepts_any_blob_length() {
+        let kernel = "a1b2c3d4e5f60718293a4b5c6d7e8f900102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+        let event_32mib = "C3RkX3BheWxvYWQAAAAAAAAAAAAAAAACAAAAAA==";
+        let event_16mib = "C3RkX3BheWxvYWQAAAAAAAAAAAAAAAABAAAAAA==";
+        let logged = manifest("1.0.0", &[("tdx.kernel", kernel)]);
+        let policy = render_rekor(&["tdx.kernel"], &resolved_from_manifest(&logged));
+
+        let ok = tdx_input(&[td_payload_event(event_32mib, kernel, 2)]);
+        assert_eq!(
+            eval_policy_vector(&policy, &ok).await,
+            (2, 2, 2, 2),
+            "td_payload blob length == 32 MiB must affirm"
+        );
+
+        // BlobLength is unauthenticated metadata and is not part of the
+        // td_payload contract, so a non-32 MiB blob is accepted.
+        let other_blob = tdx_input(&[td_payload_event(event_16mib, kernel, 2)]);
+        assert_eq!(
+            eval_policy_vector(&policy, &other_blob).await,
+            (2, 2, 2, 2),
+            "a non-32 MiB td_payload blob must affirm"
+        );
+
+        // The event payload is never parsed, so even a malformed value is
+        // accepted as long as the digest agreement holds.
+        let malformed = tdx_input(&[td_payload_event("AAAA", kernel, 2)]);
+        assert_eq!(
+            eval_policy_vector(&policy, &malformed).await,
+            (2, 2, 2, 2),
+            "the td_payload event body is not inspected"
+        );
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rekor_td_kernel_blob_length_is_not_a_conflict() {
+        let kernel = "a1b2c3d4e5f60718293a4b5c6d7e8f900102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+        let event_32mib = "C3RkX3BheWxvYWQAAAAAAAAAAAAAAAACAAAAAA==";
+        let event_16mib = "C3RkX3BheWxvYWQAAAAAAAAAAAAAAAABAAAAAA==";
+        let logged = manifest("1.0.0", &[("tdx.kernel", kernel)]);
+        let policy = render_rekor(&["tdx.kernel"], &resolved_from_manifest(&logged));
+
+        let single = tdx_input(&[td_payload_event(event_32mib, kernel, 2)]);
+        assert_eq!(eval_policy_vector(&policy, &single).await, (2, 2, 2, 2));
+
+        let dup_same = tdx_input(&[
+            td_payload_event(event_32mib, kernel, 2),
+            td_payload_event(event_32mib, kernel, 2),
+        ]);
+        assert_eq!(
+            eval_policy_vector(&policy, &dup_same).await,
+            (2, 2, 2, 2),
+            "duplicate 32 MiB td_payload events (same digest) must affirm"
+        );
+
+        // Same digest, different blob lengths: the digests still agree, so
+        // there is no conflict.
+        let differing_blob = tdx_input(&[
+            td_payload_event(event_32mib, kernel, 2),
+            td_payload_event(event_16mib, kernel, 2),
+        ]);
+        assert_eq!(
+            eval_policy_vector(&policy, &differing_blob).await,
+            (2, 2, 2, 2),
+            "32 MiB + 16 MiB td_payload events (same digest) must affirm"
+        );
+
+        // A digest disagreement is still a conflict.
+        let conflict = tdx_input(&[
+            td_payload_event(event_32mib, kernel, 2),
+            td_payload_event(
+                event_32mib,
+                "b1b2c3d4e5f60718293a4b5c6d7e8f900102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+                2,
+            ),
+        ]);
+        assert_eq!(
+            eval_policy_vector(&policy, &conflict).await,
+            (97, 2, 2, 2),
+            "conflicting td_payload digests must reject"
+        );
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rekor_td_kernel_rejects_non_rtmr1_index() {
+        let kernel = "a1b2c3d4e5f60718293a4b5c6d7e8f900102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+        let event_32mib = "C3RkX3BheWxvYWQAAAAAAAAAAAAAAAACAAAAAA==";
+        let logged = manifest("1.0.0", &[("tdx.kernel", kernel)]);
+        let policy = render_rekor(&["tdx.kernel"], &resolved_from_manifest(&logged));
+
+        let single = tdx_input(&[td_payload_event(event_32mib, kernel, 2)]);
+        assert_eq!(eval_policy_vector(&policy, &single).await, (2, 2, 2, 2));
+
+        // A descriptor-matching event at index != 2 violates the RTMR1
+        // requirement even when another index-2 event matches.
+        let bad = tdx_input(&[
+            td_payload_event(event_32mib, kernel, 2),
+            td_payload_event(event_32mib, kernel, 1),
+        ]);
+        assert_eq!(
+            eval_policy_vector(&policy, &bad).await,
+            (97, 2, 2, 2),
+            "descriptor-matching td_payload event at index != 2 must reject (fail-closed)"
+        );
+
+        // A matching event with no index at all also rejects.
+        let mut no_index = td_payload_event(event_32mib, kernel, 2);
+        no_index.as_object_mut().unwrap().remove("index");
+        let missing_index = tdx_input(&[no_index]);
+        assert_eq!(
+            eval_policy_vector(&policy, &missing_index).await,
+            (97, 2, 2, 2),
+            "descriptor-matching td_payload event without an index must reject"
+        );
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rekor_td_kernel_rejects_missing_sha384_digest() {
+        let kernel = "a1b2c3d4e5f60718293a4b5c6d7e8f900102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+        let event_32mib = "C3RkX3BheWxvYWQAAAAAAAAAAAAAAAACAAAAAA==";
+        let logged = manifest("1.0.0", &[("tdx.kernel", kernel)]);
+        let policy = render_rekor(&["tdx.kernel"], &resolved_from_manifest(&logged));
+
+        let with_sha384 = tdx_input(&[td_payload_event(event_32mib, kernel, 2)]);
+        assert_eq!(
+            eval_policy_vector(&policy, &with_sha384).await,
+            (2, 2, 2, 2)
+        );
+
+        let no_sha384 = serde_json::to_string(&json!({
+            "tdx": {
+                "quote": {
+                    "header": {"tee_type": "81000000", "vendor_id": TDX_VENDOR_ID},
+                    "body": {"td_attributes": "0000001000000000"},
+                },
+                "uefi_event_logs": [{
+                    "type_name": "EV_EFI_PLATFORM_FIRMWARE_BLOB2",
+                    "details": {"string": "td_payload"},
+                    "event": event_32mib,
+                    "digests": [{"alg": "SHA-256", "digest": hex64('0')}],
+                    "index": 2,
+                }],
+            }
+        }))
+        .expect("serialize input");
+        assert_eq!(
+            eval_policy_vector(&policy, &no_sha384).await,
+            (97, 2, 2, 2),
+            "td_payload event without a SHA-384 digest must reject (fail-closed)"
+        );
+
+        let empty_digests = serde_json::to_string(&json!({
+            "tdx": {
+                "quote": {
+                    "header": {"tee_type": "81000000", "vendor_id": TDX_VENDOR_ID},
+                    "body": {"td_attributes": "0000001000000000"},
+                },
+                "uefi_event_logs": [{
+                    "type_name": "EV_EFI_PLATFORM_FIRMWARE_BLOB2",
+                    "details": {"string": "td_payload"},
+                    "event": event_32mib,
+                    "digests": [],
+                    "index": 2,
+                }],
+            }
+        }))
+        .expect("serialize input");
+        assert_eq!(
+            eval_policy_vector(&policy, &empty_digests).await,
+            (97, 2, 2, 2),
+            "td_payload event with an empty digests array must reject (fail-closed)"
+        );
+
+        // Two events sharing the SAME `event` body, one without SHA-384: the
+        // per-event check must not be deduplicated by the event body.
+        let same_body = serde_json::to_string(&json!({
+            "tdx": {
+                "quote": {
+                    "header": {"tee_type": "81000000", "vendor_id": TDX_VENDOR_ID},
+                    "body": {"td_attributes": "0000001000000000"},
+                },
+                "uefi_event_logs": [
+                    {
+                        "type_name": "EV_EFI_PLATFORM_FIRMWARE_BLOB2",
+                        "details": {"string": "td_payload"},
+                        "event": event_32mib,
+                        "digests": [{"alg": "SHA-384", "digest": kernel}],
+                        "index": 2,
+                    },
+                    {
+                        "type_name": "EV_EFI_PLATFORM_FIRMWARE_BLOB2",
+                        "details": {"string": "td_payload"},
+                        "event": event_32mib,
+                        "digests": [{"alg": "SHA-256", "digest": hex64('0')}],
+                        "index": 2,
+                    },
+                ],
+            }
+        }))
+        .expect("serialize input");
+        assert_eq!(
+            eval_policy_vector(&policy, &same_body).await,
+            (97, 2, 2, 2),
+            "one of two same-body events without SHA-384 must reject"
+        );
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rekor_td_kernel_extracts_real_pai_event_log() {
+        // The real PAI TD kernel measurement carried by the td_payload
+        // firmware-blob2 event at RTMR1 in `tdx_CCEL_data_pai`.
+        let kernel = "85619a9146b5c1409bf034bdabd6d93df26a5a23b41b43f92a7a4025760a1c4f110194ae75a2b9625b0de97f2b00fc8f";
+
+        let input = pai_tdx_input();
+
+        let logged = manifest("1.0.0", &[("tdx.kernel", kernel)]);
+        let policy = render_rekor(&["tdx.kernel"], &resolved_from_manifest(&logged));
+        assert_eq!(
+            eval_policy_vector(&policy, &input).await,
+            (2, 2, 2, 2),
+            "real PAI event log must extract the real kernel measurement and affirm"
+        );
+
+        let tampered = "85619a9146b5c1409bf034bdabd6d93df26a5a23b41b43f92a7a4025760a1c4f110194ae75a2b9625b0de97f2b00fc80";
+        let bad_logged = manifest("1.0.0", &[("tdx.kernel", tampered)]);
+        let bad_policy = render_rekor(&["tdx.kernel"], &resolved_from_manifest(&bad_logged));
+        assert_eq!(
+            eval_policy_vector(&bad_policy, &input).await,
+            (97, 2, 2, 2),
+            "a published kernel that differs from the real PAI event-log kernel must reject"
+        );
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rekor_rootfs_cc_matching_and_tamper() {
+        const ROOT: &str = "44f6a7c111eb0d9f4dcbace76e784689dde3436c08bf7dda8d86d9f8c0b02230";
+        const TAMPERED: &str = "54f6a7c111eb0d9f4dcbace76e784689dde3436c08bf7dda8d86d9f8c0b02230";
+
+        let logged = manifest("1.0.0", &[("rootfs.cc", ROOT)]);
+        let policy = render_rekor(&["rootfs.cc"], &resolved_from_manifest(&logged));
+
+        let ok = tdx_input(&[rootfs_hash_event(Some(2), ROOT)]);
+        assert_eq!(
+            eval_policy_vector(&policy, &ok).await,
+            (2, 2, 2, 2),
+            "a matching rootfs measurement must affirm file_system"
+        );
+
+        let bad = tdx_input(&[rootfs_hash_event(Some(2), TAMPERED)]);
+        assert_eq!(
+            eval_policy_vector(&policy, &bad).await,
+            (2, 2, 2, 97),
+            "a tampered root hash must reject file_system, not executables"
+        );
+
+        let none = tdx_input(&[]);
+        assert_eq!(
+            eval_policy_vector(&policy, &none).await,
+            (2, 2, 2, 97),
+            "a missing td_payload_info event must reject file_system (fail-closed)"
+        );
+    }
+
+    /// A transparency-log entry gates every dimension its published types
+    /// imply: `rootfs.cc` drives `file_system`, the kernel/image types drive
+    /// `executables`, and a mixed entry constrains both.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_published_types_choose_their_dimensions() {
+        let root = hex64('a');
+        let kernel = hex96('b');
+        let event_32mib = "C3RkX3BheWxvYWQAAAAAAAAAAAAAAAACAAAAAA==";
+
+        // Rootfs only: the entry gates file_system alone.
+        let rootfs_manifest = manifest("1.0.0", &[("rootfs.cc", root.as_str())]);
+        let rootfs_policy = render_rekor(&["rootfs.cc"], &resolved_from_manifest(&rootfs_manifest));
+        assert_eq!(
+            eval_policy_vector(
+                &rootfs_policy,
+                &tdx_input(&[rootfs_hash_event(Some(2), &root)])
+            )
+            .await,
+            (2, 2, 2, 2)
+        );
+        assert_eq!(
+            eval_policy_vector(
+                &rootfs_policy,
+                &tdx_input(&[rootfs_hash_event(Some(2), &hex64('c'))])
+            )
+            .await,
+            (2, 2, 2, 97),
+            "a rootfs-only entry must not move executables"
+        );
+
+        // Rootfs + kernel in one entry: the entry gates both dimensions, so a
+        // measurement it cannot reconstruct rejects both.
+        let mixed_manifest = manifest(
+            "1.0.0",
+            &[
+                ("rootfs.cc", root.as_str()),
+                ("tdx.kernel", kernel.as_str()),
+            ],
+        );
+        let mixed_policy = render_rekor(
+            &["rootfs.cc", "tdx.kernel"],
+            &resolved_from_manifest(&mixed_manifest),
+        );
+
+        let both = tdx_input(&[
+            rootfs_hash_event(Some(2), &root),
+            td_payload_event(event_32mib, &kernel, 2),
+        ]);
+        assert_eq!(
+            eval_policy_vector(&mixed_policy, &both).await,
+            (2, 2, 2, 2),
+            "both published measurements matching must affirm"
+        );
+
+        let no_rootfs = tdx_input(&[td_payload_event(event_32mib, &kernel, 2)]);
+        assert_eq!(
+            eval_policy_vector(&mixed_policy, &no_rootfs).await,
+            (97, 2, 2, 97),
+            "a mixed entry that cannot reconstruct rootfs rejects both dimensions"
+        );
+        let no_kernel = tdx_input(&[rootfs_hash_event(Some(2), &root)]);
+        assert_eq!(
+            eval_policy_vector(&mixed_policy, &no_kernel).await,
+            (97, 2, 2, 97),
+            "a mixed entry that cannot reconstruct the kernel rejects both dimensions"
+        );
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rekor_container_image_extracts_real_pai_event_log() {
+        // The real PAI AAEL pull-image event resolves to repo `busybox`, which
+        // is the repository segment the logged manifest publishes, so the event
+        // log is used as-is.
+        let image_digest =
+            "sha256:16ece118a36d152ed7562347741470b1bb0b0f7561ff1fe0049857a03d4fec5d";
+
+        let input = pai_tdx_input();
+
+        let logged = manifest("1.0.0", &[("container.image.busybox", image_digest)]);
+        let policy = render_rekor(
+            &["container.image.busybox"],
+            &resolved_from_manifest(&logged),
+        );
+        assert_eq!(
+            eval_policy_vector(&policy, &input).await,
+            (2, 2, 2, 2),
+            "real PAI event log must extract the real image measurement and affirm"
+        );
+
+        let tampered = "sha256:26ece118a36d152ed7562347741470b1bb0b0f7561ff1fe0049857a03d4fec5d";
+        let bad_logged = manifest("1.0.0", &[("container.image.busybox", tampered)]);
+        let bad_policy = render_rekor(
+            &["container.image.busybox"],
+            &resolved_from_manifest(&bad_logged),
+        );
+        assert_eq!(
+            eval_policy_vector(&bad_policy, &input).await,
+            (97, 2, 2, 2),
+            "a published image digest that differs from the real PAI AAEL event must reject"
+        );
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rekor_accepts_dotted_repository_name() {
+        let digest = "sha256:d42f6e1b2aafb59383d0892824aebf5e0a2e27dad989a3fb26552a6e77e4be46";
+        let logged = manifest("1.0.0", &[("container.image.my-app.v2", digest)]);
+        let policy = render_rekor(
+            &["container.image.my-app.v2"],
+            &resolved_from_manifest(&logged),
+        );
+
+        let ok = tdx_input(&[aael_event_for_reference(
+            "registry.example.com/ns/my-app.v2:latest",
+            digest,
+        )]);
+        assert_eq!(
+            eval_policy_vector(&policy, &ok).await,
+            (2, 2, 2, 2),
+            "a repository name carrying '.' and '-' must affirm"
+        );
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rekor_strips_only_one_container_image_prefix() {
+        let digest = "sha256:d42f6e1b2aafb59383d0892824aebf5e0a2e27dad989a3fb26552a6e77e4be46";
+        // The repo tail itself starts with `container.image.`. Trimming exactly
+        // one prefix leaves it intact; a global replace would reduce it to
+        // `foo`, which never equals the extracted repo tail.
+        let measurement_type = "container.image.container.image.foo";
+        let logged = manifest("1.0.0", &[(measurement_type, digest)]);
+        let policy = render_rekor(&[measurement_type], &resolved_from_manifest(&logged));
+
+        let ok = tdx_input(&[aael_event_for_reference(
+            "registry.example.com/ns/container.image.foo:v1",
+            digest,
+        )]);
+        assert_eq!(
+            eval_policy_vector(&policy, &ok).await,
+            (2, 2, 2, 2),
+            "trim_prefix must strip exactly one container.image. prefix"
+        );
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rekor_rejects_conflicting_container_image_events() {
+        let digest_a = "sha256:d42f6e1b2aafb59383d0892824aebf5e0a2e27dad989a3fb26552a6e77e4be46";
+        let digest_b = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let logged = manifest("1.0.0", &[("container.image.cmaas-runtime", digest_a)]);
+        let policy = render_rekor(
+            &["container.image.cmaas-runtime"],
+            &resolved_from_manifest(&logged),
+        );
+
+        let single = tdx_input(&[aael_event(digest_a)]);
+        assert_eq!(eval_policy_vector(&policy, &single).await, (2, 2, 2, 2));
+
+        let dup_same = tdx_input(&[aael_event(digest_a), aael_event(digest_a)]);
+        assert_eq!(
+            eval_policy_vector(&policy, &dup_same).await,
+            (2, 2, 2, 2),
+            "duplicate AAEL events with the same digest must still affirm"
+        );
+
+        let conflict = tdx_input(&[aael_event(digest_a), aael_event(digest_b)]);
+        assert_eq!(
+            eval_policy_vector(&policy, &conflict).await,
+            (97, 2, 2, 2),
+            "conflicting AAEL digests must reject (explicit conflict detection)"
+        );
+    }
+
+    /// The `modules` measurement entry and a `transparency_log` entry that
+    /// publishes the same type read one extraction rule, so they agree on
+    /// every evidence shape.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_and_modules_kernel_paths_agree() {
+        let kernel = "a1b2c3d4e5f60718293a4b5c6d7e8f900102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+        let conflict = "b1b2c3d4e5f60718293a4b5c6d7e8f900102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+        let logged = manifest("1.0.0", &[("tdx.kernel", kernel)]);
+        let transparency = render_rekor(&["tdx.kernel"], &resolved_from_manifest(&logged));
+        let modules = render(json!([{"type": "tdx.kernel", "value": kernel}]), &[]);
+
+        let event = |digest: &str, index: Option<i64>, alg: &str| {
+            let mut e = json!({
+                "type_name": "EV_EFI_PLATFORM_FIRMWARE_BLOB2",
+                "details": {"string": "td_payload"},
+                "event": "AAAA",
+                "digests": [{"alg": alg, "digest": digest}],
+            });
+            if let Some(index) = index {
+                e["index"] = json!(index);
+            }
+            e
+        };
+
+        let cases: [(&str, Vec<Value>, i8); 4] = [
+            ("pass", vec![event(kernel, Some(2), "SHA-384")], 2),
+            ("bad index", vec![event(kernel, Some(1), "SHA-384")], 97),
+            (
+                "missing SHA-384",
+                vec![event(&hex64('0'), Some(2), "SHA-256")],
+                97,
+            ),
+            (
+                "digest conflict",
+                vec![
+                    event(kernel, Some(2), "SHA-384"),
+                    event(conflict, Some(2), "SHA-384"),
+                ],
+                97,
+            ),
+        ];
+        for (name, events, expected) in cases {
+            let input = tdx_input(&events);
+            let transparency_vector = eval_policy_vector(&transparency, &input).await;
+            let modules_vector = eval_policy_vector(&modules, &input).await;
+            assert_eq!(
+                transparency_vector.0, expected,
+                "transparency path on case {name:?}"
+            );
+            assert_eq!(modules_vector.0, expected, "modules path on case {name:?}");
+            assert_eq!(
+                transparency_vector.0, modules_vector.0,
+                "the two kernel paths must agree on case {name:?}"
+            );
+        }
+    }
+
+    /// The same real PAI event log feeds both kernel paths to the same verdict.
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_and_modules_agree_on_real_pai_event_log() {
+        const REAL_KERNEL_DIGEST: &str =
+            "85619a9146b5c1409bf034bdabd6d93df26a5a23b41b43f92a7a4025760a1c4f110194ae75a2b9625b0de97f2b00fc8f";
+
+        let input = pai_tdx_input();
+
+        let logged = manifest("1.0.0", &[("tdx.kernel", REAL_KERNEL_DIGEST)]);
+        let transparency = render_rekor(&["tdx.kernel"], &resolved_from_manifest(&logged));
+        let modules = render(
+            json!([{"type": "tdx.kernel", "value": REAL_KERNEL_DIGEST}]),
+            &[],
+        );
+
+        assert_eq!(
+            eval_policy_vector(&transparency, &input).await,
+            eval_policy_vector(&modules, &input).await,
+            "the two kernel paths must agree on the real PAI event log"
+        );
+        assert_eq!(eval_policy_vector(&modules, &input).await, (2, 2, 2, 2));
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test]
+    async fn transparency_log_rekor_compares_values_without_format_checks() {
+        let good = "sha256:d42f6e1b2aafb59383d0892824aebf5e0a2e27dad989a3fb26552a6e77e4be46";
+        let logged = manifest("1.0.0", &[("container.image.cmaas-runtime", good)]);
+        let policy = render_rekor(
+            &["container.image.cmaas-runtime"],
+            &resolved_from_manifest(&logged),
+        );
+
+        let ok = tdx_input(&[aael_event(good)]);
+        assert_eq!(
+            eval_policy_vector(&policy, &ok).await,
+            (2, 2, 2, 2),
+            "the signed digest must affirm"
+        );
+
+        // Any value that differs from the signed one changes the reconstructed
+        // manifest and rejects; no format regex is involved.
+        for other in [
+            "sha256:D42F6E1B2AAFB59383D0892824AEBF5E0A2E27DAD989A3FB26552A6E77E4BE46",
+            "sha256:abc123",
+            "d42f6e1b2aafb59383d0892824aebf5e0a2e27dad989a3fb26552a6e77e4be46",
+        ] {
+            let bad = tdx_input(&[aael_event(other)]);
+            assert_eq!(
+                eval_policy_vector(&policy, &bad).await,
+                (97, 2, 2, 2),
+                "a digest {other:?} different from the signed value must reject"
+            );
+        }
+
+        // The signed value is the only contract: a non-canonical digest the
+        // publisher signed and the evidence reports is accepted unchanged.
+        let non_canonical = "sha256:abc123";
+        let logged = manifest("1.0.0", &[("container.image.cmaas-runtime", non_canonical)]);
+        let policy = render_rekor(
+            &["container.image.cmaas-runtime"],
+            &resolved_from_manifest(&logged),
+        );
+        let matching = tdx_input(&[aael_event(non_canonical)]);
+        assert_eq!(
+            eval_policy_vector(&policy, &matching).await,
+            (2, 2, 2, 2),
+            "extraction does not impose a digest format the publisher did not"
         );
     }
 }

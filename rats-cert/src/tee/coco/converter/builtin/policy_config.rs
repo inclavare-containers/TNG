@@ -598,11 +598,18 @@ pub enum ReferenceValueConfig {
 
 #[cfg(test)]
 mod tests {
+    use crate::tee::coco::converter::builtin::converter::BuiltinCocoConverter;
+    use crate::tee::coco::converter::builtin::policies::modules::{parse_module_groups, Module};
+    use crate::tee::coco::converter::builtin::test_fixtures::{
+        artifact_entry_value, rekor_entry_value, transparency_entry,
+        SECURE_PROXY_ARTIFACT_SERVER_CONFIG_JSON,
+    };
+
     use super::*;
     use reference_value_provider_service::rv_list::{
         ReferenceValueListItem, ReferenceValueProvenanceInfo, ReferenceValueProvenanceSource,
     };
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     // === ReferenceValueConfig serialization/deserialization tests ===
 
@@ -935,5 +942,460 @@ mod tests {
             path: String::new(),
         }
         .accepts_reference_values());
+    }
+
+    #[test]
+    fn transparency_log_entry_parses_flat_and_nested() {
+        let value = rekor_entry_value(&["tdx.td-shim"], 7);
+
+        // Flat list: one group.
+        let flat: ModuleGroupsConfig =
+            serde_json::from_value(json!([transparency_entry(value.clone())])).expect("parse");
+        let groups = parse_module_groups(&flat).expect("validate");
+        assert_eq!(groups.len(), 1);
+        match &groups[0][0] {
+            Module::TransparencyLog {
+                config: cfg,
+                resolved,
+            } => {
+                assert!(resolved.is_none(), "parse does not resolve rekor data");
+                assert_eq!(cfg.published_measurements, vec!["tdx.td-shim".to_string()]);
+                assert_eq!(cfg.schema_version, "1.0.0");
+                assert_eq!(cfg.services.len(), 1);
+                match &cfg.services[0] {
+                    TransparencyServiceConfig::RekorV1 {
+                        log_url, log_index, ..
+                    } => {
+                        assert_eq!(log_url, "https://rekor.example.com");
+                        assert_eq!(*log_index, 7);
+                    }
+                    other => panic!("expected RekorV1, got {other:?}"),
+                }
+            }
+            other => panic!("expected TransparencyLog, got {other:?}"),
+        }
+
+        // Nested list: one transparency entry per group.
+        let nested: ModuleGroupsConfig = serde_json::from_value(json!([
+            [transparency_entry(value.clone())],
+            [transparency_entry(rekor_entry_value(&["tdx.kernel"], 8))],
+        ]))
+        .expect("parse");
+        let groups = parse_module_groups(&nested).expect("validate");
+        assert_eq!(groups.len(), 2);
+        assert!(matches!(groups[0][0], Module::TransparencyLog { .. }));
+        assert!(matches!(groups[1][0], Module::TransparencyLog { .. }));
+    }
+
+    #[test]
+    fn transparency_log_entry_defaults_and_publisher_key() {
+        // `schemaVersion` defaults to 1.0.0; an optional publisher key parses.
+        let value = json!({
+            "publishedMeasurements": ["container.image.cmaas-runtime"],
+            "services": [{
+                "type": "rekor-v1",
+                "logUrl": "https://rekor.example.com",
+                "logIndex": 1,
+                "publisherPublicKeyPem": "-----BEGIN PUBLIC KEY-----\nMFkw\n-----END PUBLIC KEY-----\n",
+            }],
+        });
+        let cfg: ModuleGroupsConfig =
+            serde_json::from_value(json!([transparency_entry(value)])).expect("parse");
+        let groups = parse_module_groups(&cfg).expect("validate");
+        let Module::TransparencyLog { config: entry, .. } = &groups[0][0] else {
+            panic!("expected TransparencyLog");
+        };
+        assert_eq!(entry.schema_version, "1.0.0");
+        assert!(matches!(
+            &entry.services[0],
+            TransparencyServiceConfig::RekorV1 {
+                publisher_public_key_pem: Some(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn transparency_log_entry_validation_rejects() {
+        fn entry_error(value: Value) -> String {
+            let cfg: ModuleGroupsConfig =
+                serde_json::from_value(json!([transparency_entry(value)])).expect("modules parse");
+            format!("{:#}", parse_module_groups(&cfg).unwrap_err())
+        }
+
+        let rekor = json!({"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1});
+        let artifact = json!({
+            "type": "artifact-server",
+            "url": "https://as",
+            "logServices": [{"type": "rekor-v1", "url": "https://r"}],
+        });
+
+        // Value shape.
+        assert!(entry_error(json!("not-an-object")).contains("expects an object value"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [rekor.clone()],
+            "bogus": true,
+        }))
+        .contains("unknown field"));
+        assert!(entry_error(json!({"services": [rekor.clone()]}))
+            .contains("missing field `publishedMeasurements`"));
+
+        // publishedMeasurements.
+        assert!(
+            entry_error(json!({"publishedMeasurements": [], "services": [rekor]}))
+                .contains("publishedMeasurements must be non-empty")
+        );
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.uki"],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+        }))
+        .contains("unsupported publishedMeasurements type"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim", "tdx.td-shim"],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+        }))
+        .contains("duplicate publishedMeasurements type"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["container.image.busybox", "container.image.busybox"],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+        }))
+        .contains("duplicate publishedMeasurements type"));
+
+        // Any single-segment container image repository is accepted, as is the
+        // rootfs measurement type.
+        let accepted = json!({
+            "publishedMeasurements": ["tdx.td-shim", "rootfs.cc", "container.image.busybox"],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+        });
+        let cfg: ModuleGroupsConfig =
+            serde_json::from_value(json!([transparency_entry(accepted)])).expect("modules parse");
+        assert!(parse_module_groups(&cfg).is_ok());
+
+        for measurement_type in [
+            "container.image.",
+            "container.image.foo/bar",
+            "container.image.foo@sha256",
+            "container.image.foo:tag",
+        ] {
+            let error = entry_error(json!({
+                "publishedMeasurements": [measurement_type],
+                "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+            }));
+            assert!(
+                error.contains("invalid container image repository"),
+                "{measurement_type}: {error}"
+            );
+        }
+
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["com.alibabacloud.container.image.busybox"],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+        }))
+        .contains("unsupported publishedMeasurements type"));
+
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["com.alibabacloud.rootfs.cc"],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+        }))
+        .contains("unsupported publishedMeasurements type"));
+
+        let accepted_fallback = json!({
+            "publishedMeasurements": ["tdx.td-shim", "container.image.busybox"],
+            "services": [{"type": "artifact-server", "url": "https://as",
+                          "logServices": [{"type": "rekor-v1", "url": "https://r"}]}],
+            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r2", "logIndex": 2}],
+            "fallbackPublishedMeasurements": ["container.image.busybox"],
+        });
+        let cfg: ModuleGroupsConfig =
+            serde_json::from_value(json!([transparency_entry(accepted_fallback)]))
+                .expect("modules parse");
+        assert!(parse_module_groups(&cfg).is_ok());
+
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim", "container.image.busybox"],
+            "services": [{"type": "artifact-server", "url": "https://as",
+                          "logServices": [{"type": "rekor-v1", "url": "https://r"}]}],
+            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r2", "logIndex": 2}],
+            "fallbackPublishedMeasurements": ["container.image.nginx"],
+        }))
+        .contains("not in publishedMeasurements"));
+
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim", "container.image.busybox"],
+            "services": [{"type": "artifact-server", "url": "https://as",
+                          "logServices": [{"type": "rekor-v1", "url": "https://r"}]}],
+            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r2", "logIndex": 2}],
+            "fallbackPublishedMeasurements": [],
+        }))
+        .contains("fallbackPublishedMeasurements non-empty"));
+
+        // services.
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [],
+        }))
+        .contains("services must be non-empty"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [
+                {"type": "artifact-server", "url": "https://as",
+                 "logServices": [{"type": "rekor-v1", "url": "https://r"}]},
+                {"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1},
+            ],
+        }))
+        .contains("artifact-server must be the only primary service"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [
+                {"type": "rekor-v1", "logUrl": "https://r1", "logIndex": 1},
+                {"type": "rekor-v1", "logUrl": "https://r2", "logIndex": 2},
+            ],
+        }))
+        .contains("exactly one rekor-v1 service"));
+
+        // artifact-server field constraints.
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "artifact-server", "url": "",
+                          "logServices": [{"type": "rekor-v1", "url": "https://r"}]}],
+        }))
+        .contains("url is required"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "artifact-server", "url": "https://as", "logServices": []}],
+        }))
+        .contains("logServices non-empty"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "artifact-server", "url": "https://as",
+                          "logServices": [{"type": "rekor-v2", "url": "https://r"}]}],
+        }))
+        .contains("type must be rekor-v1"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "artifact-server", "url": "https://as",
+                          "logServices": [{"type": "rekor-v1", "url": ""}]}],
+        }))
+        .contains("url required"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "artifact-server", "url": "https://as",
+                          "logServices": [
+                              {"type": "rekor-v1", "url": "https://r"},
+                              {"type": "rekor-v1", "url": "https://r/"},
+                          ]}],
+        }))
+        .contains("duplicate"));
+
+        // rekor-v1 field constraints.
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "rekor-v1", "logUrl": "", "logIndex": 1}],
+        }))
+        .contains("logUrl required"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": -1}],
+        }))
+        .contains("logIndex must be >= 0"));
+
+        // fallback pairing.
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+            "fallbackPublishedMeasurements": ["tdx.td-shim"],
+        }))
+        .contains("fallbackPublishedMeasurements requires fallbackServices"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 2}],
+            "fallbackPublishedMeasurements": ["tdx.td-shim"],
+        }))
+        .contains("only supported with an artifact-server primary"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [artifact.clone()],
+            "fallbackServices": [],
+            "fallbackPublishedMeasurements": ["tdx.td-shim"],
+        }))
+        .contains("fallbackServices must be non-empty"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "artifact-server", "url": "https://as",
+                          "logServices": [{"type": "rekor-v1", "url": "https://r"}]}],
+            "fallbackServices": [
+                {"type": "artifact-server", "url": "https://as2",
+                 "logServices": [{"type": "rekor-v1", "url": "https://r2"}]},
+            ],
+            "fallbackPublishedMeasurements": ["tdx.td-shim"],
+        }))
+        .contains("must be rekor-v1"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "artifact-server", "url": "https://as",
+                          "logServices": [{"type": "rekor-v1", "url": "https://r"}]}],
+            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+            "fallbackPublishedMeasurements": ["tdx.kernel"],
+        }))
+        .contains("not in publishedMeasurements"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "artifact-server", "url": "https://as",
+                          "logServices": [{"type": "rekor-v1", "url": "https://r"}]}],
+            "fallbackServices": [{"type": "rekor-v1", "logUrl": "", "logIndex": 1}],
+            "fallbackPublishedMeasurements": ["tdx.td-shim"],
+        }))
+        .contains("fallbackServices logUrl required"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "artifact-server", "url": "https://as",
+                          "logServices": [{"type": "rekor-v1", "url": "https://r"}]}],
+            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": -1}],
+            "fallbackPublishedMeasurements": ["tdx.td-shim"],
+        }))
+        .contains("fallbackServices logIndex >= 0"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "artifact-server", "url": "https://as",
+                          "logServices": [{"type": "rekor-v1", "url": "https://r"}]}],
+            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1}],
+            "fallbackPublishedMeasurements": [],
+        }))
+        .contains("fallbackPublishedMeasurements non-empty"));
+
+        // Unknown fields nested inside a service entry are rejected at load,
+        // so a mistyped key cannot silently fall back to the built-in key.
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1,
+                          "publisherPublicKeyPemX": "x"}],
+        }))
+        .contains("unknown field"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1,
+                          "rekorPublicKeyPemX": "x"}],
+        }))
+        .contains("unknown field"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "artifact-server", "url": "https://as",
+                          "logServices": [{"type": "rekor-v1", "url": "https://r"}],
+                          "publisherPublicKeyPemX": "x"}],
+        }))
+        .contains("unknown field"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "artifact-server", "url": "https://as",
+                          "logServices": [{"type": "rekor-v1", "url": "https://r", "urlX": "x"}]}],
+        }))
+        .contains("unknown field"));
+        assert!(entry_error(json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "artifact-server", "url": "https://as",
+                          "logServices": [{"type": "rekor-v1", "url": "https://r"}]}],
+            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1,
+                                  "logUrlX": "x"}],
+            "fallbackPublishedMeasurements": ["tdx.td-shim"],
+        }))
+        .contains("unknown field"));
+
+        // A fully specified valid configuration still parses: the strictness
+        // must not reject known fields.
+        let valid_rekor_entry = json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "rekor-v1", "logUrl": "https://r", "logIndex": 1,
+                          "rekorPublicKeyPem": "pem", "publisherPublicKeyPem": "pem"}],
+        });
+        let cfg: ModuleGroupsConfig =
+            serde_json::from_value(json!([transparency_entry(valid_rekor_entry)]))
+                .expect("modules parse");
+        assert!(parse_module_groups(&cfg).is_ok());
+
+        let valid_artifact_entry = json!({
+            "publishedMeasurements": ["tdx.td-shim"],
+            "services": [{"type": "artifact-server", "url": "https://as",
+                          "logServices": [{"type": "rekor-v1", "url": "https://r"}],
+                          "publisherPublicKeyPem": "pem"}],
+            "fallbackServices": [{"type": "rekor-v1", "logUrl": "https://r2", "logIndex": 2}],
+            "fallbackPublishedMeasurements": ["tdx.td-shim"],
+        });
+        let cfg: ModuleGroupsConfig =
+            serde_json::from_value(json!([transparency_entry(valid_artifact_entry)]))
+                .expect("modules parse");
+        assert!(parse_module_groups(&cfg).is_ok());
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn secure_proxy_readme_json_round_trips() {
+        let json = SECURE_PROXY_ARTIFACT_SERVER_CONFIG_JSON;
+        let policy: PolicyConfig = serde_json::from_str(json).expect("parse into PolicyConfig");
+        let PolicyConfig::Modules { modules } = &policy else {
+            panic!("fixture must be a modules policy");
+        };
+        parse_module_groups(modules).expect("artifact-server + fallback entry validates");
+        let round = serde_json::to_string(&policy).expect("serialize");
+        let reparsed: PolicyConfig = serde_json::from_str(&round).expect("re-parse");
+        assert_eq!(
+            serde_json::to_value(&policy).unwrap(),
+            serde_json::to_value(&reparsed).unwrap(),
+            "PolicyConfig must round-trip"
+        );
+    }
+
+    /// A rekor-v1 primary that names more than one service is a configuration
+    /// error, caught by validation before any network access.
+    #[test]
+    fn load_policy_rejects_multiple_rekor_v1_services() {
+        let cfg_json = json!({
+            "type": "modules",
+            "modules": [transparency_entry(json!({
+                "publishedMeasurements": ["tdx.td-shim"],
+                "schemaVersion": "1.0.0",
+                "services": [
+                    {"type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 1},
+                    {"type": "rekor-v1", "logUrl": "https://rekor.sigstore.dev", "logIndex": 2},
+                ],
+            }))],
+        });
+        let cfg: PolicyConfig = serde_json::from_value(cfg_json).unwrap();
+        let PolicyConfig::Modules { modules } = &cfg else {
+            panic!("expected Modules");
+        };
+        let err = parse_module_groups(modules).unwrap_err();
+        assert!(
+            format!("{err:?}").contains("exactly one rekor-v1 service"),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn modules_with_transparency_rejects_reference_values() {
+        let policy = PolicyConfig::Modules {
+            modules: serde_json::from_value(json!([transparency_entry(artifact_entry_value(
+                "https://attest.example.com",
+                "https://rekor.sigstore.dev",
+                None,
+            ))]))
+            .expect("modules config"),
+        };
+        let mut rvs = std::collections::HashMap::new();
+        rvs.insert("measurement.tdx.ovmf".to_string(), json!(["x"]));
+        let reference = ReferenceValueConfig::Sample {
+            payload: SampleProvenancePayloadConfig::Inline {
+                content: Provenance { rvs },
+            },
+        };
+        let err = match BuiltinCocoConverter::new(&policy, std::slice::from_ref(&reference)).await {
+            Ok(_) => panic!("external reference_values must be rejected"),
+            Err(e) => e,
+        };
+        assert!(
+            format!("{err:?}").contains("does not accept external reference_values"),
+            "{err:?}"
+        );
     }
 }

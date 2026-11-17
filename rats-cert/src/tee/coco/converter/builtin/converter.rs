@@ -405,6 +405,12 @@ impl GenericConverter for BuiltinCocoConverter {
 
 #[cfg(test)]
 mod tests {
+    use crate::crypto::HashAlgo;
+    use crate::tee::coco::converter::builtin::test_fixtures::cmaas_fixture_quote_and_eventlog;
+    use crate::tee::coco::evidence::{tee_from_str, CocoEvidence};
+    use crate::tee::{GenericConverter, GenericVerifier, ReportData};
+    use anyhow::Result;
+
     use super::super::policy_config::{
         ModuleGroupsConfig, SampleProvenancePayloadConfig, SlsaReferenceValuePayloadConfig,
     };
@@ -831,5 +837,196 @@ default file_system := 2"#,
                 "{error:?}"
             );
         }
+    }
+
+    /// Requires live network access to rekor.sigstore.dev (fetch by logIndex).
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn new_with_transparency_log_policy_fetches_reference_values() {
+        let cfg: PolicyConfig = serde_json::from_str(
+            r#"{
+                "type": "modules",
+                "modules": [{
+                    "type": "transparency_log",
+                    "value": {
+                        "publishedMeasurements": ["container.image.cmaas-runtime"],
+                        "schemaVersion": "1.0.0",
+                        "services": [{
+                            "type": "rekor-v1",
+                            "logUrl": "https://rekor.sigstore.dev",
+                            "logIndex": 2544139140
+                        }]
+                    }
+                }]
+            }"#,
+        )
+        .expect("parse modules transparency_log config");
+        let result = BuiltinCocoConverter::new(&cfg, &[]).await;
+        assert!(
+            result.is_ok(),
+            "BuiltinCocoConverter::new with a transparency_log module failed: {:?}",
+            result.err()
+        );
+    }
+
+    /// The shared main flow: parse config -> converter.new (live rekor fetch +
+    /// authenticate + bake payloadHash) -> build CocoEvidence -> convert ->
+    /// verify_evidence.
+    async fn run_transparency_log_appraisal(
+        cfg_json: &str,
+        quote: &str,
+        cc_eventlog: &str,
+    ) -> Result<()> {
+        let cfg: PolicyConfig = serde_json::from_str(cfg_json)?;
+        let converter = BuiltinCocoConverter::new(&cfg, &[])
+            .await?
+            .for_testing_skip_runtime_data();
+        let verifier = converter.new_verifier().await?;
+        let evidence = build_cmaas_evidence(quote, cc_eventlog);
+        let token = converter.convert(&evidence).await;
+        let token = match token {
+            Ok(t) => t,
+            Err(error) => {
+                if format!("{error:?}")
+                    .contains("feature `tdx-verifier` is not enabled for `verifier` crate")
+                {
+                    return Ok(()); // environment limitation, not a real failure
+                }
+                return Err(error.into());
+            }
+        };
+        verifier.verify_evidence(&token, &ReportData::None).await?;
+        Ok(())
+    }
+
+    fn build_cmaas_evidence(quote: &str, cc_eventlog: &str) -> CocoEvidence {
+        let tee = tee_from_str("tdx").expect("tee");
+        let aa_evidence = serde_json::to_vec(&json!({
+            "quote": quote,
+            "cc_eventlog": cc_eventlog,
+        }))
+        .expect("serialize aa_evidence");
+        CocoEvidence::new(
+            tee,
+            aa_evidence,
+            None,
+            "{}".to_string(),
+            HashAlgo::Sha256,
+            None,
+        )
+        .expect("build CocoEvidence")
+    }
+
+    fn flip_one_char(s: &str) -> String {
+        let mut chars: Vec<char> = s.chars().collect();
+        let idx = chars
+            .iter()
+            .position(|c| *c == 'A' || *c == 'B')
+            .unwrap_or(0);
+        chars[idx] = if chars[idx] == 'A' { 'B' } else { 'A' };
+        chars.into_iter().collect()
+    }
+
+    const BOGUS_P256_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEsGjh0eIF22/JwEkRvU5KROvNsL/F\nK6qP/kbKO0CoelOqRKJQuC9z0ruwyx12S94/m69+iaan0SKR1IJjIbbfHw==\n-----END PUBLIC KEY-----\n";
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn evidence_appraises_with_transparency_log_policy() {
+        let cfg = r#"{"type":"modules","modules":[{"type":"transparency_log","value":{"publishedMeasurements":["container.image.cmaas-runtime"],"schemaVersion":"1.0.0","services":[{"type":"rekor-v1","logUrl":"https://rekor.sigstore.dev","logIndex":2310520944}]}}]}"#;
+        let (quote, cc_eventlog) = cmaas_fixture_quote_and_eventlog();
+
+        // Happy path.
+        assert!(
+            run_transparency_log_appraisal(cfg, &quote, &cc_eventlog)
+                .await
+                .is_ok(),
+            "correct config + evidence must affirm"
+        );
+
+        // 1. An unsupported measurement type is rejected at load. Replace the whole
+        // type string: only swapping the repo suffix would leave a valid
+        // container image type and move the failure to the fetch instead.
+        let wrong_type = cfg.replace("container.image.cmaas-runtime", "tdx.uki");
+        let error = run_transparency_log_appraisal(&wrong_type, &quote, &cc_eventlog)
+            .await
+            .expect_err("unsupported publishedMeasurements type must fail at load");
+        assert!(
+            format!("{error:#}").contains("unsupported publishedMeasurements type"),
+            "{error:#}"
+        );
+
+        // 2. Wrong schemaVersion.
+        let cfg_t2 = cfg.replace("1.0.0", "9.9.9");
+        assert!(
+            run_transparency_log_appraisal(&cfg_t2, &quote, &cc_eventlog)
+                .await
+                .is_err(),
+            "wrong schemaVersion must fail"
+        );
+
+        // 3. Wrong logIndex (out-of-range -> fetch 404).
+        let cfg_t3 = cfg.replace("2310520944", "99999999999");
+        assert!(
+            run_transparency_log_appraisal(&cfg_t3, &quote, &cc_eventlog)
+                .await
+                .is_err(),
+            "wrong logIndex must fail"
+        );
+
+        // 4. Wrong logUrl (non-existent host -> fetch fails).
+        let cfg_t4 = cfg.replace("rekor.sigstore.dev", "rekor.invalid.example");
+        assert!(
+            run_transparency_log_appraisal(&cfg_t4, &quote, &cc_eventlog)
+                .await
+                .is_err(),
+            "wrong logUrl must fail"
+        );
+
+        // 5. Wrong rekorPublicKeyPem (bogus P-256 key).
+        let cfg_t5 = cfg.replace(
+            "\"logIndex\":2310520944}",
+            &format!(
+                "\"logIndex\":2310520944,\"rekorPublicKeyPem\":\"{}\"}}",
+                BOGUS_P256_PEM
+            ),
+        );
+        assert!(
+            run_transparency_log_appraisal(&cfg_t5, &quote, &cc_eventlog)
+                .await
+                .is_err(),
+            "wrong rekorPublicKeyPem must fail"
+        );
+
+        // 6. Wrong publisherPublicKeyPem (bogus key -> DSSE verify fails).
+        let cfg_t6 = cfg.replace(
+            "\"logIndex\":2310520944}",
+            &format!(
+                "\"logIndex\":2310520944,\"publisherPublicKeyPem\":\"{}\"}}",
+                BOGUS_P256_PEM
+            ),
+        );
+        assert!(
+            run_transparency_log_appraisal(&cfg_t6, &quote, &cc_eventlog)
+                .await
+                .is_err(),
+            "wrong publisherPublicKeyPem must fail"
+        );
+
+        // 7. Tampered quote.
+        let tampered_quote = flip_one_char(&quote);
+        assert!(
+            run_transparency_log_appraisal(cfg, &tampered_quote, &cc_eventlog)
+                .await
+                .is_err(),
+            "tampered quote must fail"
+        );
+
+        // 8. Tampered cc_eventlog (no AAEL events -> reject).
+        assert!(
+            run_transparency_log_appraisal(cfg, &quote, "AAAA")
+                .await
+                .is_err(),
+            "tampered cc_eventlog must fail"
+        );
     }
 }

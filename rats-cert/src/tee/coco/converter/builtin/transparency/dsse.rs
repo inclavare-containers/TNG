@@ -148,6 +148,13 @@ pub(crate) fn verify_publisher_signature(
 
 #[cfg(test)]
 mod tests {
+    use crate::tee::coco::converter::builtin::test_fixtures::{
+        jcs_compact, manifest, sha256_hex, REKOR_V1_ENTRY_JSON,
+    };
+    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+    use base64::Engine as _;
+    use serde_json::Value;
+
     use super::*;
 
     /// A real rekor v1 `dsse` entry always carries a signature, so an empty
@@ -182,6 +189,88 @@ mod tests {
         assert_eq!(
             canonical_json(&value).unwrap(),
             r#"{"a":[{"y":"x","z":true}],"b":1}"#
+        );
+    }
+
+    #[test]
+    fn serde_json_serialization_matches_real_rekor_payload_hash() {
+        let logged = manifest(
+            "1.0.0",
+            &[(
+                "container.image.cmaas-runtime",
+                "sha256:d42f6e1b2aafb59383d0892824aebf5e0a2e27dad989a3fb26552a6e77e4be46",
+            )],
+        );
+        assert_eq!(
+            sha256_hex(jcs_compact(&logged).as_bytes()),
+            "1011b70c962b91eb9233dbdb39bb3fdf61723619ca7cc5b46bed0512f976d9b8",
+            "JCS (sorted compact) form must equal the real rekor payloadHash"
+        );
+    }
+
+    #[cfg(feature = "crypto-rustcrypto")]
+    #[test]
+    fn verify_dsse_signature_validates_real_fixture_signature() {
+        use p256::ecdsa::signature::Verifier;
+
+        let entry_raw = REKOR_V1_ENTRY_JSON;
+        let entry: Value = serde_json::from_str(entry_raw).expect("parse fixture");
+        let body_bytes = BASE64_STANDARD
+            .decode(entry["body"].as_str().expect("body"))
+            .expect("decode entry body");
+        let body: Value = serde_json::from_slice(&body_bytes).expect("parse body");
+        let sig0 = &body["spec"]["signatures"][0];
+        let sig_b64 = sig0["signature"].as_str().expect("signature").to_string();
+        let verifier_pem = String::from_utf8(
+            BASE64_STANDARD
+                .decode(sig0["verifier"].as_str().expect("verifier"))
+                .expect("decode verifier b64"),
+        )
+        .expect("publisher PEM utf8");
+
+        let logged = manifest(
+            "1.0.0",
+            &[(
+                "container.image.cmaas-runtime",
+                "sha256:d42f6e1b2aafb59383d0892824aebf5e0a2e27dad989a3fb26552a6e77e4be46",
+            )],
+        );
+        let payload = jcs_compact(&logged);
+
+        let verify = |payload_str: &str, sig_b64: &str, key_pem: &str| -> bool {
+            (|| -> anyhow::Result<bool> {
+                let key = parse_p256_public_key(key_pem)?;
+                let sig_bytes = BASE64_STANDARD.decode(sig_b64)?;
+                let signature = p256::ecdsa::Signature::from_der(&sig_bytes)?;
+                let pae = dsse_pae(DSSE_PAYLOAD_TYPE, payload_str.as_bytes());
+                key.verify(&pae, &signature)?;
+                Ok(true)
+            })()
+            .unwrap_or(false)
+        };
+
+        assert!(
+            verify(&payload, &sig_b64, &verifier_pem),
+            "real fixture DSSE signature must verify with its publisher key"
+        );
+
+        let tampered = payload.replace(
+            "d42f6e1b2aafb59383d0892824aebf5e0a2e27dad989a3fb26552a6e77e4be46",
+            "e42f6e1b2aafb59383d0892824aebf5e0a2e27dad989a3fb26552a6e77e4be46",
+        );
+        assert_ne!(payload, tampered, "tamper did not change payload");
+        assert!(
+            !verify(&tampered, &sig_b64, &verifier_pem),
+            "tampered manifest must fail DSSE verification"
+        );
+
+        let wrong_pem = "-----BEGIN PUBLIC KEY-----\n\
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE2G2Y+2tabdTV5BcGiBIx0a9fAFwr\n\
+kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
+-----END PUBLIC KEY-----\n";
+        assert!(
+            !verify(&payload, &sig_b64, wrong_pem),
+            "wrong publisher key must fail DSSE verification"
         );
     }
 }
