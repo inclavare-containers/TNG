@@ -1,11 +1,11 @@
-//! Artifact-server and on-demand rekor authentication for the
+//! Artifact-server and on-demand rekor verification for the
 //! transparency_log policy.
 //!
 //! The generated Rego policy calls `tng.resolve_artifact_server` for the
 //! artifact-server primary and `tng.fetch_rekor_on_demand` as the fallback
 //! when the primary fails to resolve a measurement. Both are thin wrappers
-//! over the transparency seam; the authentication and caching live in
-//! [`super::authenticate`] and the two adapters.
+//! over the transparency seam; the verification and caching live in
+//! [`super::verify_manifest`] and the two adapters.
 
 #[cfg(feature = "crypto-rustcrypto")]
 use std::sync::Arc;
@@ -21,7 +21,7 @@ use super::cache::{
     CanonicalLogServices, ManifestDigest, PublisherKeyId, ResolveCacheKey, TransparencyCaches,
 };
 #[cfg(feature = "crypto-rustcrypto")]
-use super::{dsse, rekor_keys, rekor_v1, Authentication};
+use super::{dsse, rekor_keys, rekor_v1, VerifyOutcome};
 use crate::tee::coco::converter::builtin::policy_config::{
     ArtifactLogService, TransparencyServiceConfig,
 };
@@ -32,24 +32,24 @@ use crate::tee::coco::converter::builtin::policy_config::{
 
 /// The artifact-server adapter for the transparency seam.
 ///
-/// Resolve the manifest, authenticate every returned rekor-v1 entry, verify
-/// each entry's publisher signature over the canonical manifest, and compare
-/// each trusted `payloadHash`. The resolve is cached under the server URL, the
+/// Resolve the manifest, verify every returned rekor-v1 entry, verify each
+/// entry's publisher signature over the canonical manifest, and compare each
+/// trusted `payloadHash`. The resolve is cached under the server URL, the
 /// manifest digest, the canonical log-services list, and the publisher key, so
 /// a success is only reused for the identical trust configuration. An explicit
-/// revocation is returned as [`Authentication::Revoked`] and never cached.
-pub(crate) async fn authenticate(
+/// revocation is returned as [`VerifyOutcome::Revoked`] and never cached.
+pub(crate) async fn verify_manifest(
     manifest: &serde_json::Value,
     service: &TransparencyServiceConfig,
     caches: &TransparencyCaches,
-) -> Result<Authentication> {
+) -> Result<VerifyOutcome> {
     let TransparencyServiceConfig::ArtifactServer {
         url,
         log_services,
         publisher_public_key_pem,
     } = service
     else {
-        anyhow::bail!("artifact_server::authenticate called with a non-artifact service");
+        anyhow::bail!("artifact_server::verify_manifest called with a non-artifact service");
     };
     let expected = dsse::canonical_manifest_sha256(manifest)?;
     let cache_key = ResolveCacheKey {
@@ -59,9 +59,9 @@ pub(crate) async fn authenticate(
         publisher_key: PublisherKeyId::new(publisher_public_key_pem.as_deref()),
     };
     if caches.resolve_hit(&cache_key).await {
-        return Ok(Authentication::Verified);
+        return Ok(VerifyOutcome::Verified);
     }
-    match resolve_and_authenticate(
+    match resolve_and_verify(
         manifest,
         url,
         log_services,
@@ -70,11 +70,11 @@ pub(crate) async fn authenticate(
     )
     .await?
     {
-        ResolveStatus::Verified => {
+        VerifyOutcome::Verified => {
             caches.insert_resolve(cache_key).await;
-            Ok(Authentication::Verified)
+            Ok(VerifyOutcome::Verified)
         }
-        ResolveStatus::Revoked => Ok(Authentication::Revoked),
+        VerifyOutcome::Revoked => Ok(VerifyOutcome::Revoked),
     }
 }
 
@@ -126,8 +126,8 @@ pub(crate) fn fetch_rekor_on_demand_host_await(
                     rekor_public_key_pem: None,
                     publisher_public_key_pem,
                 };
-                match super::authenticate(Some(&manifest), &service, &caches).await {
-                    Ok(Authentication::Verified) => Some(true),
+                match super::verify_manifest(&manifest, &service, &caches).await {
+                    Ok(VerifyOutcome::Verified) => Some(true),
                     _ => None,
                 }
             };
@@ -182,9 +182,9 @@ pub(crate) fn resolve_artifact_server_host_await(
                     log_services,
                     publisher_public_key_pem,
                 };
-                match super::authenticate(Some(&manifest), &service, &caches).await {
-                    Ok(Authentication::Verified) => Some("ok"),
-                    Ok(Authentication::Revoked) => Some("deny"),
+                match super::verify_manifest(&manifest, &service, &caches).await {
+                    Ok(VerifyOutcome::Verified) => Some("ok"),
+                    Ok(VerifyOutcome::Revoked) => Some("deny"),
                     _ => None,
                 }
             };
@@ -193,15 +193,15 @@ pub(crate) fn resolve_artifact_server_host_await(
     })
 }
 
-/// Resolve the manifest via the Artifact Server and authenticate every
-/// returned rekor-v1 entry. Returns `Ok(())` only when:
+/// Resolve the manifest via the Artifact Server and verify every returned
+/// rekor-v1 entry. Returns `Ok(VerifyOutcome::Verified)` only when:
 /// - the resolve status is `"resolved"`,
 /// - at least one entry is returned,
 /// - every returned entry's `(type, url)` matches exactly one requested
 ///   `logService` (no unrequested, duplicate, or missing entries, request
 ///   binding for a non-trusted resolver; URLs are normalized by
 ///   trimming trailing slashes),
-/// - every entry authenticates (checkpoint + inclusion + SET via
+/// - every entry verifies (checkpoint + inclusion + SET via
 ///   `rekor_v1::verify_entry`),
 /// - every entry's DSSE publisher signature verifies over
 ///   `sha256(DSSEPAE(canonical manifest))` with a trusted publisher key
@@ -214,26 +214,18 @@ pub(crate) fn resolve_artifact_server_host_await(
 /// `configured_publisher_pem` is the optional `ArtifactServer` config override;
 /// empty/None falls back to the built-in publisher key.
 ///
-/// Returns `Ok(ResolveStatus::Revoked)` (distinct from any error) when the
+/// Returns `Ok(VerifyOutcome::Revoked)` (distinct from any error) when the
 /// artifact server answers `measurement_revoked`, so the caller reports a
 /// hard denial instead of an ordinary failure. Any error → `Err` (mapped to
 /// `"fail"` by the caller, never cached).
 #[cfg(feature = "crypto-rustcrypto")]
-enum ResolveStatus {
-    /// Resolve status `"resolved"` and every returned entry authenticated.
-    Verified,
-    /// The artifact server answered `measurement_revoked`.
-    Revoked,
-}
-
-#[cfg(feature = "crypto-rustcrypto")]
-async fn resolve_and_authenticate(
+async fn resolve_and_verify(
     manifest: &serde_json::Value,
     url: &str,
     log_services: &[ArtifactLogService],
     expected_hash: &str,
     configured_publisher_pem: Option<&str>,
-) -> Result<ResolveStatus> {
+) -> Result<VerifyOutcome> {
     let sdk_manifest: artifact_resolve_sdk::ReleaseManifest =
         serde_json::from_value(manifest.clone())?;
     let sdk_log_services: Vec<artifact_resolve_sdk::LogService> = log_services
@@ -260,7 +252,7 @@ async fn resolve_and_authenticate(
         // the caller reports "deny" so the rekor fallback does not fire (the
         // append-only rekor entry of a revoked manifest is immutable and
         // would still fully authenticate).
-        Err(err) if err.is_measurement_revoked() => return Ok(ResolveStatus::Revoked),
+        Err(err) if err.is_measurement_revoked() => return Ok(VerifyOutcome::Revoked),
         Err(err) => return Err(err.into()),
     };
     if resp.status != "resolved" {
@@ -379,7 +371,7 @@ async fn resolve_and_authenticate(
             remaining
         );
     }
-    Ok(ResolveStatus::Verified)
+    Ok(VerifyOutcome::Verified)
 }
 
 /// Resolve the trusted DSSE publisher key for a resolve response entry

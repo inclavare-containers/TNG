@@ -1,5 +1,5 @@
-//! Rekor v1 transparency-log entry fetch + authentication (by logIndex):
-//! fetch a Rekor v1 entry by logIndex, authenticate it via checkpoint +
+//! Rekor v1 transparency-log entry fetch + verification (by logIndex):
+//! fetch a Rekor v1 entry by logIndex, verify it via checkpoint +
 //! Merkle inclusion + SET, and return the trusted `payloadHash` (from
 //! `body.spec.payloadHash.value`) plus the in-band DSSE signature
 //! (`body.spec.signatures[0].signature`).
@@ -19,7 +19,7 @@ use super::dsse;
 #[cfg(feature = "crypto-rustcrypto")]
 use super::rekor_keys::verify_log_id;
 use super::rekor_keys::{rekor_public_key, RekorPublicKey};
-use super::{AuthenticatedRekor, Authentication};
+use super::{RekorBaseline, VerifyOutcome};
 use crate::tee::coco::converter::builtin::policy_config::TransparencyServiceConfig;
 
 /// A Rekor v1 transparency-log entry (the raw object returned by
@@ -99,7 +99,7 @@ pub(crate) struct RekorSignature {
 /// in-band DSSE signature (`body.spec.signatures[0].signature`) extracted for
 /// downstream policy verification.
 #[cfg(feature = "crypto-rustcrypto")]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct VerifiedRekorEntry {
     pub(crate) payload_hash: String,
     // Read by the seam's rekor adapter: the load path threads it into the
@@ -423,25 +423,15 @@ pub(crate) fn verify_entry(entry: &RekorEntry, key: &RekorPublicKey) -> Result<V
     })
 }
 
-/// The rekor-direct adapter for the transparency seam.
+/// Load the rekor-v1 baseline a policy bakes at render time: fetch the entry,
+/// verify it against the configured-or-built-in rekor key, and return the
+/// trusted payload hash, the in-band DSSE signature, and the effective
+/// publisher key.
 ///
-/// With `manifest == None` this is the policy-load path: fetch the entry,
-/// authenticate it against the configured-or-built-in rekor key, and return
-/// the trusted payload hash plus the in-band DSSE signature for the Rego bake.
-/// The entry is deliberately not cached here: a load must re-authenticate
-/// against the configured `rekorPublicKeyPem`, so a cached success from a
-/// different key configuration must not satisfy it.
-///
-/// With a bound manifest this is the appraisal-time fallback: fetch and
-/// authenticate the entry (caching the authenticated entry on success), verify
-/// the publisher signature over the canonical manifest, and compare the
-/// trusted payload hash. A cached entry still goes through the publisher
-/// signature check, so a cache hit does not weaken the binding.
-pub(crate) async fn authenticate(
-    manifest: Option<&serde_json::Value>,
-    service: &TransparencyServiceConfig,
-    caches: &TransparencyCaches,
-) -> Result<Authentication> {
+/// The entry is deliberately not cached: a load must re-verify against the
+/// configured `rekorPublicKeyPem`, so a cached success from a different key
+/// configuration must not satisfy it.
+pub(crate) async fn load_baseline(service: &TransparencyServiceConfig) -> Result<RekorBaseline> {
     let TransparencyServiceConfig::RekorV1 {
         log_url,
         log_index,
@@ -449,24 +439,45 @@ pub(crate) async fn authenticate(
         publisher_public_key_pem,
     } = service
     else {
-        anyhow::bail!("rekor_v1::authenticate called with a non-rekor service");
+        anyhow::bail!("rekor_v1::load_baseline called with a non-rekor service");
     };
 
-    let Some(manifest) = manifest else {
-        tracing::info!(
-            log_url,
-            log_index,
-            "Loading transparency_log entry: fetching Rekor v1 entry"
-        );
-        let entry = fetch_entry(log_url, *log_index).await?;
-        let key = rekor_public_key(log_url, rekor_public_key_pem.as_deref())?;
-        let auth = verify_entry(&entry, &key)?;
-        return Ok(Authentication::Rekor(AuthenticatedRekor {
-            payload_hash: auth.payload_hash,
-            dsse_signature: dsse::require_dsse_signature(&auth.dsse_signature)?.to_string(),
-            publisher_key: dsse::effective_publisher_pem(publisher_public_key_pem.as_deref())
-                .to_string(),
-        }));
+    tracing::info!(
+        log_url,
+        log_index,
+        "Loading transparency_log entry: fetching Rekor v1 entry"
+    );
+    let entry = fetch_entry(log_url, *log_index).await?;
+    let key = rekor_public_key(log_url, rekor_public_key_pem.as_deref())?;
+    let verified = verify_entry(&entry, &key)?;
+    Ok(RekorBaseline {
+        entry: VerifiedRekorEntry {
+            payload_hash: verified.payload_hash,
+            dsse_signature: dsse::require_dsse_signature(&verified.dsse_signature)?.to_string(),
+        },
+        publisher_key: dsse::effective_publisher_pem(publisher_public_key_pem.as_deref())
+            .to_string(),
+    })
+}
+
+/// Verify a manifest bound to a rekor-direct entry at appraisal time: fetch and
+/// verify the entry (caching the verified entry on success), verify the
+/// publisher signature over the canonical manifest, and compare the trusted
+/// payload hash. A cached entry still goes through the publisher signature
+/// check, so a cache hit does not weaken the binding.
+pub(crate) async fn verify_manifest(
+    manifest: &serde_json::Value,
+    service: &TransparencyServiceConfig,
+    caches: &TransparencyCaches,
+) -> Result<VerifyOutcome> {
+    let TransparencyServiceConfig::RekorV1 {
+        log_url,
+        log_index,
+        publisher_public_key_pem,
+        ..
+    } = service
+    else {
+        anyhow::bail!("rekor_v1::verify_manifest called with a non-rekor service");
     };
 
     let expected = dsse::canonical_manifest_sha256(manifest)?;
@@ -498,7 +509,7 @@ pub(crate) async fn authenticate(
             expected
         );
     }
-    Ok(Authentication::Verified)
+    Ok(VerifyOutcome::Verified)
 }
 
 #[cfg(test)]

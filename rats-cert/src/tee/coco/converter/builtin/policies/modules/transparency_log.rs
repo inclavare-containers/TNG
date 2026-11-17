@@ -2,7 +2,7 @@
 //! The rekor-v1 and artifact-server services live in `builtin/transparency`.
 
 use super::super::super::policy_config::{TransparencyLogEntryConfig, TransparencyServiceConfig};
-use super::super::super::transparency::AuthenticatedRekor;
+use super::super::super::transparency::{RekorBaseline, VerifiedRekorEntry};
 
 /// Render the Rego that reconstructs one ReleaseManifest and binds it to
 /// `name`.
@@ -54,11 +54,11 @@ fn manifest_rules(types: &[String], schema_expr: &str, name: &str) -> String {
 /// `pred` is the entry predicate the modules builder ANDs into its group, and
 /// `prefix` namespaces every global identifier the entry defines so several
 /// entries coexist in one policy. A rekor-v1 primary expects `resolved` to
-/// carry the data fetched and authenticated at load; an artifact-server primary
-/// resolves its manifest at appraisal time and ignores `resolved`.
+/// carry the data verified at load; an artifact-server primary resolves its
+/// manifest at appraisal time and ignores `resolved`.
 pub(super) fn build_entry_rules(
     cfg: &TransparencyLogEntryConfig,
-    resolved: Option<&AuthenticatedRekor>,
+    resolved: Option<&RekorBaseline>,
     pred: &str,
     prefix: &str,
 ) -> anyhow::Result<String> {
@@ -102,10 +102,10 @@ pub(super) fn build_entry_rules(
 
 "#,
                 prefix = prefix,
-                payload_hash = resolved.payload_hash,
+                payload_hash = resolved.entry.payload_hash,
                 schema_version = cfg.schema_version,
                 manifest = manifest,
-                dsse_signature = resolved.dsse_signature,
+                dsse_signature = resolved.entry.dsse_signature,
                 publisher_key = resolved.publisher_key,
                 pred = pred,
             ))
@@ -230,14 +230,18 @@ mod tests {
     #[test]
     fn transparency_log_rego_shape_contract() {
         let resolved = [
-            Some(AuthenticatedRekor {
-                payload_hash: "00".repeat(32),
-                dsse_signature: "sig-a".to_string(),
+            Some(RekorBaseline {
+                entry: VerifiedRekorEntry {
+                    payload_hash: "00".repeat(32),
+                    dsse_signature: "sig-a".to_string(),
+                },
                 publisher_key: "key-a".to_string(),
             }),
-            Some(AuthenticatedRekor {
-                payload_hash: "11".repeat(32),
-                dsse_signature: "sig-b".to_string(),
+            Some(RekorBaseline {
+                entry: VerifiedRekorEntry {
+                    payload_hash: "11".repeat(32),
+                    dsse_signature: "sig-b".to_string(),
+                },
                 publisher_key: "key-b".to_string(),
             }),
         ];
@@ -322,7 +326,7 @@ mod tests {
         assert_eq!(eval_policy_vector(&policy, &ok).await, (2, 2, 2, 2));
 
         let mut wrong = resolved_from_manifest(&logged);
-        wrong.payload_hash = "00".repeat(32);
+        wrong.entry.payload_hash = "00".repeat(32);
         let policy = render_rekor(&["container.image.cmaas-runtime"], &wrong);
         assert_eq!(
             eval_policy_vector(&policy, &ok).await,
@@ -362,7 +366,7 @@ mod tests {
         }
 
         let mut wrong = resolved.clone();
-        wrong.payload_hash = "00".repeat(32);
+        wrong.entry.payload_hash = "00".repeat(32);
         let policy = render_rekor(&["container.image.cmaas-runtime", "tdx.td-shim"], &wrong);
         assert_eq!(
             eval_policy_vector(&policy, &ok).await,
@@ -461,7 +465,7 @@ mod tests {
         // A signature that does not verify rejects even though the payloadHash
         // still matches: DSSE verification is mandatory.
         let mut bad_signature = resolved.clone();
-        bad_signature.dsse_signature = BASE64_STANDARD.encode([0u8; 64]);
+        bad_signature.entry.dsse_signature = BASE64_STANDARD.encode([0u8; 64]);
         let policy = render_rekor(&["container.image.cmaas-runtime"], &bad_signature);
         assert_eq!(
             eval_policy_vector(&policy, &ok).await,
@@ -505,9 +509,11 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
         let ok = tdx_input(&[aael_event(digest)]);
 
         // Built-in key + real signature -> DSSE verifies -> affirm.
-        let mut resolved = AuthenticatedRekor {
-            payload_hash: payload_hash.to_string(),
-            dsse_signature: dsse_signature.clone(),
+        let mut resolved = RekorBaseline {
+            entry: VerifiedRekorEntry {
+                payload_hash: payload_hash.to_string(),
+                dsse_signature: dsse_signature.clone(),
+            },
             publisher_key: dsse::BUILTIN_LOG_ENTRY_PUB_KEY_PEM.to_string(),
         };
         let policy = render_rekor(&["container.image.cmaas-runtime"], &resolved);
@@ -518,7 +524,7 @@ kBbmLSGtks4L3qX6yYY0zufBnhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==\n\
         );
 
         // A bogus signature with the built-in key rejects.
-        resolved.dsse_signature = BASE64_STANDARD.encode([0u8; 64]);
+        resolved.entry.dsse_signature = BASE64_STANDARD.encode([0u8; 64]);
         let policy = render_rekor(&["container.image.cmaas-runtime"], &resolved);
         assert_eq!(
             eval_policy_vector(&policy, &ok).await,

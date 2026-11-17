@@ -747,7 +747,7 @@ fn render_case(case: &Case) -> String {
         } => {
             let mut resolved = resolved_from_manifest(manifest);
             if let Some(hash) = payload_hash_override {
-                resolved.payload_hash = (*hash).to_string();
+                resolved.entry.payload_hash = (*hash).to_string();
             }
             render_modules_json(
                 json!([transparency_entry(entry.clone())]),

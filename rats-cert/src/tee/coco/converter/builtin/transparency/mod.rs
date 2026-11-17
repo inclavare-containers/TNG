@@ -1,10 +1,11 @@
-//! Transparency-log authentication.
+//! Transparency-log verification.
 //!
-//! One seam, [`authenticate`], serves all three callers: the rekor-v1 primary
-//! at policy-load time (which bakes the authenticated entry into Rego), the
-//! artifact-server resolve at appraisal time, and the rekor on-demand fallback.
-//! The two adapters behind it are [`rekor_v1::authenticate`] and
-//! [`artifact_server::authenticate`].
+//! Two seams serve the three callers. [`load_rekor_baseline`] is the policy-load
+//! path for a rekor-v1 primary, which bakes the verified entry into Rego.
+//! [`verify_manifest`] is the appraisal path for the artifact-server resolve and
+//! the rekor on-demand fallback. The adapters behind them are
+//! [`rekor_v1::load_baseline`], [`rekor_v1::verify_manifest`], and
+//! [`artifact_server::verify_manifest`].
 
 pub(crate) mod artifact_server;
 pub(crate) mod cache;
@@ -13,53 +14,58 @@ pub(crate) mod rekor_keys;
 pub(crate) mod rekor_v1;
 
 pub use cache::TransparencyCaches;
+pub(crate) use rekor_v1::VerifiedRekorEntry;
 
 use super::policy_config::TransparencyServiceConfig;
 
-/// The authenticated data a rekor-direct entry contributes to a policy: the
-/// trusted `payloadHash`, the in-band DSSE signature, and the effective
-/// publisher key the signature is verified against.
+/// The verified baseline a rekor-direct entry contributes to a policy: the
+/// trusted entry data plus the effective publisher key its signature is
+/// verified against.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AuthenticatedRekor {
-    pub(crate) payload_hash: String,
-    pub(crate) dsse_signature: String,
+pub(crate) struct RekorBaseline {
+    pub(crate) entry: VerifiedRekorEntry,
     pub(crate) publisher_key: String,
 }
 
-/// The outcome of authenticating one log service.
+/// The result of verifying a bound manifest against one log service.
 #[derive(Debug)]
-pub(crate) enum Authentication {
-    /// A rekor-direct entry authenticated without a bound manifest (policy
-    /// load). The trusted payload hash and signature are baked into Rego and
-    /// bound to the manifest at appraisal time.
-    Rekor(AuthenticatedRekor),
-    /// A bound manifest authenticated.
+pub(crate) enum VerifyOutcome {
+    /// The manifest verified against the log.
     Verified,
     /// The artifact server explicitly revoked the measurement.
     Revoked,
 }
 
-/// Authenticate a log service, optionally binding the result to `manifest`.
+/// Load the baseline a rekor-v1 primary bakes into Rego at policy-load time.
 ///
-/// `manifest` is `None` only for the policy-load rekor path: there is no
-/// manifest yet, so the adapter returns the authenticated entry for the Rego
-/// bake and the binding happens at appraisal time. An artifact-server primary
-/// does no I/O at load; it resolves at appraisal, so a `None` manifest returns
-/// `Verified` without touching the network.
-pub(crate) async fn authenticate(
-    manifest: Option<&serde_json::Value>,
+/// Only a rekor-v1 service has a load-time baseline. An artifact-server primary
+/// resolves at appraisal time and must not reach this call. The entry is
+/// deliberately not cached: a load re-authenticates against the configured key,
+/// so a cached success from a different key configuration cannot satisfy it.
+pub(crate) async fn load_rekor_baseline(
+    service: &TransparencyServiceConfig,
+) -> anyhow::Result<RekorBaseline> {
+    rekor_v1::load_baseline(service).await
+}
+
+/// Verify a bound manifest against a transparency-log service.
+///
+/// A rekor-v1 service fetches (or reuses a cached) entry and binds it to the
+/// manifest; an artifact-server service resolves the measurement at appraisal
+/// time. An explicit revocation is reported as [`VerifyOutcome::Revoked`] and
+/// never cached; ordinary failures are `Err`.
+pub(crate) async fn verify_manifest(
+    manifest: &serde_json::Value,
     service: &TransparencyServiceConfig,
     caches: &TransparencyCaches,
-) -> anyhow::Result<Authentication> {
+) -> anyhow::Result<VerifyOutcome> {
     match service {
         TransparencyServiceConfig::RekorV1 { .. } => {
-            rekor_v1::authenticate(manifest, service, caches).await
+            rekor_v1::verify_manifest(manifest, service, caches).await
         }
-        TransparencyServiceConfig::ArtifactServer { .. } => match manifest {
-            // The artifact-server primary resolves at appraisal time.
-            None => Ok(Authentication::Verified),
-            Some(manifest) => artifact_server::authenticate(manifest, service, caches).await,
-        },
+        TransparencyServiceConfig::ArtifactServer { .. } => {
+            artifact_server::verify_manifest(manifest, service, caches).await
+        }
     }
 }
 
@@ -127,10 +133,10 @@ mod tests {
             .await
     }
 
-    /// A rekor-direct entry authenticates without a manifest and returns the
+    /// A rekor-direct entry verifies without a manifest and returns the
     /// trusted payload hash plus the in-band DSSE signature for the Rego bake.
     #[tokio::test]
-    async fn rekor_load_time_returns_the_authenticated_entry() {
+    async fn rekor_load_time_returns_the_verified_entry() {
         let (_manifest, log_entry, _entry_url, log_index) = cmaas_transparency_tuple();
         let server = MockServer::start().await;
         let _mock = mount_rekor(&server, log_index, rekor_entries_body(&log_entry)).await;
@@ -141,18 +147,15 @@ mod tests {
             Some(SIGSTORE_REKOR_V1_PUB_KEY_PEM),
             None,
         );
-        let outcome = authenticate(None, &service, &TransparencyCaches::new())
+        let outcome = load_rekor_baseline(&service)
             .await
-            .expect("load-time authentication");
-        let Authentication::Rekor(entry) = outcome else {
-            panic!("expected the authenticated rekor entry, got {outcome:?}");
-        };
+            .expect("load-time verification");
         assert_eq!(
-            entry.payload_hash,
+            outcome.entry.payload_hash,
             "b40611d4faa5c667f125fe2b9f52a9ef40171ff63b775a95d08b126fba640564"
         );
-        assert!(!entry.dsse_signature.is_empty());
-        assert_eq!(entry.publisher_key, dsse::BUILTIN_LOG_ENTRY_PUB_KEY_PEM);
+        assert!(!outcome.entry.dsse_signature.is_empty());
+        assert_eq!(outcome.publisher_key, dsse::BUILTIN_LOG_ENTRY_PUB_KEY_PEM);
     }
 
     /// A wrong explicit rekor key fails the logID check.
@@ -170,7 +173,7 @@ mod tests {
             Some(DSSE_PUBLISHER_PUB_KEY_PEM),
             None,
         );
-        let err = authenticate(None, &service, &TransparencyCaches::new())
+        let err = load_rekor_baseline(&service)
             .await
             .expect_err("a wrong rekor key must fail");
         assert!(err.to_string().contains("logID mismatch"), "{err}");
@@ -184,10 +187,10 @@ mod tests {
         let _mock = mount_rekor(&server, log_index, rekor_entries_body(&log_entry)).await;
 
         let service = rekor_service(&server.uri(), log_index, None, None);
-        let outcome = authenticate(Some(&manifest), &service, &TransparencyCaches::new())
+        let outcome = verify_manifest(&manifest, &service, &TransparencyCaches::new())
             .await
             .expect("bound rekor authentication");
-        assert!(matches!(outcome, Authentication::Verified), "{outcome:?}");
+        assert!(matches!(outcome, VerifyOutcome::Verified), "{outcome:?}");
     }
 
     /// The publisher signature must verify against the configured key, so a
@@ -204,7 +207,7 @@ mod tests {
             None,
             Some(SIGSTORE_REKOR_V1_PUB_KEY_PEM),
         );
-        let err = authenticate(Some(&manifest), &service, &TransparencyCaches::new())
+        let err = verify_manifest(&manifest, &service, &TransparencyCaches::new())
             .await
             .expect_err("a wrong publisher key must fail");
         assert!(
@@ -222,10 +225,10 @@ mod tests {
         let _mock = mount_resolve(&server, ResponseTemplate::new(200).set_body_string(body)).await;
 
         let service = artifact_service(&server.uri(), vec![log_service(&entry_url)], None);
-        let outcome = authenticate(Some(&manifest), &service, &TransparencyCaches::new())
+        let outcome = verify_manifest(&manifest, &service, &TransparencyCaches::new())
             .await
             .expect("artifact-server authentication");
-        assert!(matches!(outcome, Authentication::Verified), "{outcome:?}");
+        assert!(matches!(outcome, VerifyOutcome::Verified), "{outcome:?}");
     }
 
     /// An explicit server-side revocation is distinct from an ordinary
@@ -243,10 +246,10 @@ mod tests {
         let _mock = mount_resolve(&server, ResponseTemplate::new(403).set_body_string(body)).await;
 
         let service = artifact_service(&server.uri(), vec![log_service(&entry_url)], None);
-        let outcome = authenticate(Some(&manifest), &service, &TransparencyCaches::new())
+        let outcome = verify_manifest(&manifest, &service, &TransparencyCaches::new())
             .await
             .expect("a revocation is not an error");
-        assert!(matches!(outcome, Authentication::Revoked), "{outcome:?}");
+        assert!(matches!(outcome, VerifyOutcome::Revoked), "{outcome:?}");
     }
 
     /// Any other artifact-server failure is an ordinary error.
@@ -262,7 +265,7 @@ mod tests {
 
         let service = artifact_service(&server.uri(), vec![log_service(&entry_url)], None);
         assert!(
-            authenticate(Some(&manifest), &service, &TransparencyCaches::new())
+            verify_manifest(&manifest, &service, &TransparencyCaches::new())
                 .await
                 .is_err(),
             "a server error must be an ordinary failure"
@@ -294,7 +297,7 @@ mod tests {
             vec![log_service(&entry_url)],
             Some(SIGSTORE_REKOR_V1_PUB_KEY_PEM),
         );
-        let err = authenticate(Some(&manifest), &service, &TransparencyCaches::new())
+        let err = verify_manifest(&manifest, &service, &TransparencyCaches::new())
             .await
             .expect_err("a wrong configured publisher key must fail");
         assert!(
@@ -319,7 +322,7 @@ mod tests {
             ],
             None,
         );
-        let err = authenticate(Some(&manifest), &service, &TransparencyCaches::new())
+        let err = verify_manifest(&manifest, &service, &TransparencyCaches::new())
             .await
             .expect_err("a missing requested log entry must fail");
         assert!(
@@ -350,7 +353,7 @@ mod tests {
         let _mock = mount_resolve(&server, ResponseTemplate::new(200).set_body_string(body)).await;
 
         let service = artifact_service(&server.uri(), vec![log_service(&entry_url)], None);
-        let err = authenticate(Some(&manifest), &service, &TransparencyCaches::new())
+        let err = verify_manifest(&manifest, &service, &TransparencyCaches::new())
             .await
             .expect_err("a duplicate log entry must fail");
         assert!(
@@ -373,7 +376,7 @@ mod tests {
             vec![log_service("https://rekor.openanolis.cn")],
             None,
         );
-        let err = authenticate(Some(&manifest), &service, &TransparencyCaches::new())
+        let err = verify_manifest(&manifest, &service, &TransparencyCaches::new())
             .await
             .expect_err("an unrequested log entry must fail");
         assert!(
@@ -405,26 +408,27 @@ mod tests {
                 vec![log_service(&entry_url)],
                 Some(publisher),
             );
-            let outcome = authenticate(Some(&manifest), &service, &caches)
+            let outcome = verify_manifest(&manifest, &service, &caches)
                 .await
                 .expect("resolve authentication");
-            assert!(matches!(outcome, Authentication::Verified), "{outcome:?}");
+            assert!(matches!(outcome, VerifyOutcome::Verified), "{outcome:?}");
         }
         drop(mock);
         server.verify().await;
     }
 
-    /// The artifact-server primary does no I/O at policy load.
+    /// An artifact-server primary has no load-time rekor baseline: it resolves
+    /// at appraisal time, so the load seam rejects it.
     #[tokio::test]
-    async fn artifact_server_load_time_is_deferred() {
+    async fn load_rekor_baseline_rejects_an_artifact_server_service() {
         let service = artifact_service(
             "http://127.0.0.1:1",
             vec![log_service("https://rekor.sigstore.dev")],
             None,
         );
-        let outcome = authenticate(None, &service, &TransparencyCaches::new())
+        let err = load_rekor_baseline(&service)
             .await
-            .expect("artifact-server load is deferred");
-        assert!(matches!(outcome, Authentication::Verified), "{outcome:?}");
+            .expect_err("an artifact-server primary must not load a rekor baseline");
+        assert!(err.to_string().contains("non-rekor service"), "{err}");
     }
 }

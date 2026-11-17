@@ -5,10 +5,9 @@ use self::families::Families;
 use super::super::policy_config::{
     value_shape, GpuPostureConfig, ModuleEntryConfig, ModuleGroupsConfig, NvidiaPostureConfig,
     TcbMinStatus, TdxBit, TdxCollateralConfig, TdxEventlog, TdxPostureConfig, TdxSeptVe,
-    TdxTcbConfig, TransparencyLogEntryConfig,
+    TdxTcbConfig, TransparencyLogEntryConfig, TransparencyServiceConfig,
 };
-use super::super::transparency::TransparencyCaches;
-use super::super::transparency::{self, AuthenticatedRekor, Authentication};
+use super::super::transparency::{self, RekorBaseline};
 use crate::errors::*;
 use anyhow::Context;
 use std::collections::BTreeSet;
@@ -63,10 +62,10 @@ pub(crate) enum Module {
     /// entry.
     TransparencyLog {
         config: TransparencyLogEntryConfig,
-        /// Authenticated rekor data for a rekor-v1 primary, filled by the
-        /// resolve phase. An artifact-server primary resolves its manifest at
-        /// appraisal time and stays `None`.
-        resolved: Option<AuthenticatedRekor>,
+        /// Verified rekor data for a rekor-v1 primary, filled by the resolve
+        /// phase. An artifact-server primary resolves its manifest at appraisal
+        /// time and stays `None`.
+        resolved: Option<RekorBaseline>,
     },
 }
 
@@ -352,29 +351,22 @@ pub(super) async fn build_modules_policy(config: &ModuleGroupsConfig) -> Result<
     render_modules_policy(&groups).map_err(Error::BuiltinPolicyTemplateFailed)
 }
 
-/// Authenticate every rekor-v1 primary through the transparency seam, storing
-/// its data on the module entry. An artifact-server primary resolves at
-/// appraisal time and stays unresolved here, and the seam performs no I/O for
-/// it.
+/// Load the verification baseline for every rekor-v1 primary through the
+/// transparency seam, storing it on the module entry. An artifact-server
+/// primary resolves at appraisal time and stays unresolved here.
 async fn resolve_module_groups(groups: &mut [Vec<Module>]) -> Result<()> {
-    let caches = TransparencyCaches::shared();
     for module in groups.iter_mut().flatten() {
         if let Module::TransparencyLog { config, resolved } = module {
             let service = config.services.first().ok_or_else(|| {
                 Error::TransparencyLogFetchFailed(anyhow::anyhow!("services must be non-empty"))
             })?;
-            *resolved = match transparency::authenticate(None, service, &caches)
-                .await
-                .map_err(Error::TransparencyLogFetchFailed)?
-            {
-                Authentication::Rekor(entry) => Some(entry),
-                // Artifact-server primary: resolved at appraisal time.
-                Authentication::Verified => None,
-                Authentication::Revoked => {
-                    return Err(Error::TransparencyLogFetchFailed(anyhow::anyhow!(
-                        "a transparency_log primary cannot be revoked at policy-load time"
-                    )))
-                }
+            *resolved = match service {
+                TransparencyServiceConfig::RekorV1 { .. } => Some(
+                    transparency::load_rekor_baseline(service)
+                        .await
+                        .map_err(Error::TransparencyLogFetchFailed)?,
+                ),
+                TransparencyServiceConfig::ArtifactServer { .. } => None,
             };
         }
     }
