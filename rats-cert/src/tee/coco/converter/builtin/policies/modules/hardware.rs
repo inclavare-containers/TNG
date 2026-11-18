@@ -23,6 +23,8 @@ pub(crate) enum HardwareCheck {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TdxHardwareConfig {
     pub(super) posture: TdxPostureConfig,
+    /// The `min_tcb_date` converted to epoch seconds, filled by `prepare`.
+    pub(super) min_tcb_date_epoch: Option<i64>,
 }
 
 impl TdxHardwareConfig {
@@ -38,7 +40,29 @@ impl TdxHardwareConfig {
                 anyhow::bail!("tdx collateral min_tcb_date {date:?} is not YYYY-MM-DD");
             }
         }
-        Ok(Self { posture })
+        Ok(Self {
+            posture,
+            min_tcb_date_epoch: None,
+        })
+    }
+
+    /// Resolve the per-entry data the renderer needs but cannot derive from a
+    /// cache: the collateral date in the epoch seconds the verifier reports.
+    pub(super) fn prepare(&mut self) -> anyhow::Result<()> {
+        self.min_tcb_date_epoch = match self
+            .posture
+            .collateral
+            .as_ref()
+            .and_then(|collateral| collateral.min_tcb_date.as_ref())
+        {
+            Some(date) => Some(iso_date_to_epoch_secs(date).with_context(|| {
+                format!(
+                    "validated tdx collateral min_tcb_date {date:?} is not convertible to epoch seconds"
+                )
+            })?),
+            None => None,
+        };
+        Ok(())
     }
 }
 
@@ -75,10 +99,10 @@ impl NvidiaHardwareConfig {
 /// binding is enforced unconditionally by the verifier's `runtime_data` path,
 /// so it is not a policy knob and is not emitted here.
 pub(super) fn tdx_posture_rule(
-    cfg: &TdxHardwareConfig,
+    hardware: &TdxHardwareConfig,
     name: &str,
 ) -> anyhow::Result<(String, Vec<String>)> {
-    let cfg = &cfg.posture;
+    let cfg = &hardware.posture;
     let mut body: Vec<String> = Vec::new();
     let mut extra: Vec<String> = Vec::new();
 
@@ -147,8 +171,8 @@ pub(super) fn tdx_posture_rule(
             body.push("\tvc.collateral_expired == false".to_string());
         }
         if let Some(date) = &coll.min_tcb_date {
-            let epoch = iso_date_to_epoch_secs(date).with_context(|| {
-                format!("validated tdx collateral min_tcb_date {date:?} is not convertible to epoch seconds")
+            let epoch = hardware.min_tcb_date_epoch.ok_or_else(|| {
+                anyhow::anyhow!("tdx collateral min_tcb_date {date:?} was not prepared")
             })?;
             body.push(format!("\tvc.tcb_level_date_tag >= {epoch}"));
         }

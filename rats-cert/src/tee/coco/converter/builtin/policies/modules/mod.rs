@@ -49,7 +49,10 @@ impl Platform {
     }
 }
 
-/// Build the `modules` Rego policy.
+/// Build the `modules` Rego policy in three phases: parse the config into the
+/// typed entries, prepare the per-entry data that needs no cache, then render.
+/// Rekor-v1 transparency primaries are fetched between prepare and render;
+/// they are the only load-time I/O.
 ///
 /// Each entry emits an entry predicate and gates one or more AR4SI dimensions:
 /// measurements gate `executables`, except `rootfs.cc` which gates
@@ -72,9 +75,11 @@ impl Platform {
 /// its log entry during the resolve phase. An artifact-server primary defers to
 /// appraisal time and does no I/O at load.
 pub(super) async fn build_modules_policy(config: &ModuleGroupsConfig) -> Result<String> {
-    // Parse and validate the config, resolve the rekor primaries (the only
-    // load-time I/O), then render from the fully-resolved module tree.
+    // Parse and validate the config, resolve the cache-free per-entry data and
+    // the rekor primaries (the only load-time I/O), then render from the
+    // fully-resolved module tree.
     let mut groups = parse_module_groups(config).map_err(Error::BuiltinPolicyTemplateFailed)?;
+    prepare_module_groups(&mut groups).map_err(Error::BuiltinPolicyTemplateFailed)?;
     resolve_module_groups(&mut groups).await?;
     render_modules_policy(&groups).map_err(Error::BuiltinPolicyTemplateFailed)
 }
@@ -136,6 +141,14 @@ pub(crate) fn parse_module_groups(
         groups.push(parsed);
     }
     Ok(groups)
+}
+
+/// Resolve every entry's cache-free derived data before rendering.
+pub(crate) fn prepare_module_groups(groups: &mut [Vec<ModuleEntry>]) -> anyhow::Result<()> {
+    for entry in groups.iter_mut().flatten() {
+        entry.prepare()?;
+    }
+    Ok(())
 }
 
 /// Load the verification baseline for every rekor-v1 primary through the
@@ -357,7 +370,6 @@ mod tests {
 
     use super::super::test_harness::eval_policy_vector;
     use super::entry::{unknown_module_type, EntryType, ModuleEntry};
-    use super::entry::Measurement;
     use super::hardware::{iso_date_to_epoch_secs, HardwareCheck};
     use super::measurement::Measurement;
     use super::Platform;
@@ -390,7 +402,8 @@ mod tests {
     /// Render a policy without network I/O. None of these tests use a
     /// `transparency_log` entry, so no resolved rekor data is needed.
     fn build_policy(config: &ModuleGroupsConfig) -> anyhow::Result<String> {
-        let groups = parse_module_groups(config)?;
+        let mut groups = parse_module_groups(config)?;
+        prepare_module_groups(&mut groups)?;
         render_modules_policy(&groups)
     }
 
@@ -1253,6 +1266,24 @@ mod tests {
         ))
         .expect_err("bad date must reject");
         assert!(err.to_string().contains("YYYY-MM-DD"), "{err}");
+    }
+
+    #[test]
+    fn prepare_resolves_the_tdx_collateral_date() {
+        let cfg =
+            modules_cfg(r#"[{"type":"tdx","value":{"collateral":{"min_tcb_date":"2026-06-01"}}}]"#);
+        let mut groups = parse_module_groups(&cfg).expect("parse");
+        let ModuleEntry::HardwareCheck(HardwareCheck::Tdx(tdx)) = &groups[0][0] else {
+            panic!("expected Tdx");
+        };
+        assert_eq!(tdx.min_tcb_date_epoch, None, "parse does not resolve dates");
+
+        prepare_module_groups(&mut groups).expect("prepare");
+        let ModuleEntry::HardwareCheck(HardwareCheck::Tdx(tdx)) = &groups[0][0] else {
+            panic!("expected Tdx");
+        };
+        // 2026-06-01 UTC midnight.
+        assert_eq!(tdx.min_tcb_date_epoch, Some(1780272000));
     }
 
     #[tokio::test]

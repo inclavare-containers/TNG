@@ -9,7 +9,9 @@ use super::super::policy_config::ModuleGroupsConfig;
 use super::super::test_fixtures::{jcs_compact, sha256_hex};
 use super::super::test_fixtures::{rekor_entry_value, transparency_entry};
 use super::super::transparency::{RekorBaseline, VerifiedRekorEntry};
-use super::modules::{parse_module_groups, render_modules_policy, ModuleEntry};
+use super::modules::{
+    parse_module_groups, prepare_module_groups, render_modules_policy, ModuleEntry,
+};
 use serde_json::{json, Value};
 
 // --- Policy rendering helpers ---------------------------------------------
@@ -23,6 +25,7 @@ pub(in crate::tee::coco::converter::builtin::policies) fn render_modules(
     resolved: &[Option<RekorBaseline>],
 ) -> String {
     let mut groups = parse_module_groups(config).expect("parse modules policy");
+    prepare_module_groups(&mut groups).expect("prepare modules policy");
     attach_resolved(&mut groups, resolved);
     render_modules_policy(&groups).expect("render modules policy")
 }

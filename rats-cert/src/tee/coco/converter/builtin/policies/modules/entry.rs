@@ -86,6 +86,16 @@ impl ModuleEntry {
         }
     }
 
+    /// Resolve the per-entry data the renderer needs that no cache is involved
+    /// in. Data that requires I/O or a transparency cache stays in the resolve
+    /// and appraisal paths.
+    pub(super) fn prepare(&mut self) -> anyhow::Result<()> {
+        if let Self::HardwareCheck(HardwareCheck::Tdx(hardware)) = self {
+            hardware.prepare()?;
+        }
+        Ok(())
+    }
+
     /// The AR4SI dimensions this entry gates. A measurement entry uses the
     /// dimension its family owns; a transparency-log entry gates every
     /// dimension its published types imply; every hardware check gates
