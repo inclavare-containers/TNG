@@ -46,9 +46,11 @@ jobs:
         # This job uses the rustup toolchain, so skip the spec's system
         # cargo/rust BuildRequires. Rocky 8's repo does not reliably carry the
         # pinned >= 1.89.0 versions, and yum-builddep fails when they are
-        # missing or older. --skip-broken also tolerates an appstream gcc whose
-        # libgcc is not yet in the base repo; clippy builds with clang.
-        run: yum-builddep -y --skip-unavailable --skip-broken -D 'with_rustup 1' ./trusted-network-gateway.spec
+        # missing or older. --nobest covers the other intermittent failure: dnf
+        # picks an appstream gcc whose matching libgcc and libgomp have not
+        # reached the mirror yet and refuses to install that best candidate.
+        # Falling back to an older gcc is fine because clippy builds with clang.
+        run: yum-builddep -y --skip-unavailable --skip-broken --nobest -D 'with_rustup 1' ./trusted-network-gateway.spec
 
       - name: Install Clippy
         run: rustup component add clippy
