@@ -4,7 +4,7 @@ use reference_value_provider_service::extractors::extractor_modules::sample::Pro
 use reference_value_provider_service::rv_list::ReferenceValueListPayload;
 use serde::{Deserialize, Serialize};
 
-use super::policies::modules::families;
+use super::policies::modules::measurement::families;
 
 /// Configuration for policy loading
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -630,7 +630,9 @@ pub enum ReferenceValueConfig {
 #[cfg(test)]
 mod tests {
     use crate::tee::coco::converter::builtin::converter::BuiltinCocoConverter;
-    use crate::tee::coco::converter::builtin::policies::modules::{parse_module_groups, Module};
+    use crate::tee::coco::converter::builtin::policies::modules::{
+        parse_module_groups, ModuleEntry,
+    };
     use crate::tee::coco::converter::builtin::test_fixtures::{
         artifact_entry_value, rekor_entry_value, transparency_entry,
         ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM, SECURE_PROXY_ARTIFACT_SERVER_CONFIG_JSON,
@@ -997,7 +999,7 @@ mod tests {
         let groups = parse_module_groups(&flat).expect("validate");
         assert_eq!(groups.len(), 1);
         match &groups[0][0] {
-            Module::TransparencyLog {
+            ModuleEntry::TransparencyLog {
                 config: cfg,
                 resolved,
             } => {
@@ -1024,8 +1026,8 @@ mod tests {
         .expect("parse");
         let groups = parse_module_groups(&nested).expect("validate");
         assert_eq!(groups.len(), 2);
-        assert!(matches!(groups[0][0], Module::TransparencyLog { .. }));
-        assert!(matches!(groups[1][0], Module::TransparencyLog { .. }));
+        assert!(matches!(groups[0][0], ModuleEntry::TransparencyLog { .. }));
+        assert!(matches!(groups[1][0], ModuleEntry::TransparencyLog { .. }));
     }
 
     #[test]
@@ -1043,7 +1045,7 @@ mod tests {
         let cfg: ModuleGroupsConfig =
             serde_json::from_value(json!([transparency_entry(value)])).expect("parse");
         let groups = parse_module_groups(&cfg).expect("validate");
-        let Module::TransparencyLog { config: entry, .. } = &groups[0][0] else {
+        let ModuleEntry::TransparencyLog { config: entry, .. } = &groups[0][0] else {
             panic!("expected TransparencyLog");
         };
         assert_eq!(entry.schema_version, "1.0.0");

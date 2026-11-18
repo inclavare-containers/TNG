@@ -10,28 +10,19 @@
 
 use std::collections::BTreeSet;
 
-use super::super::super::policy_config::value_shape;
-use super::{Dimension, Module};
+use strum::IntoEnumIterator;
 
-/// One measurement-extraction family. Families are emitted independently; a
-/// policy selects the ones its measurement entries and transparency-log
-/// declared types need.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) enum MeasurementFamily {
-    TdxTdShim,
-    TdxOvmf,
-    TdxKernel,
-    TdxUki,
-    RootfsCc,
-    ContainerImage,
-    AiModel,
-}
+use super::super::Dimension;
+use super::{
+    AiModelMeasurement, ContainerImageMeasurement, Measurement, MeasurementFamily, Sha256Digest,
+    Sha384Digest,
+};
 
 /// The registry row for one family. A parameterized family's prefixes end in
 /// `.` and take the entry name (repository or model id) as a suffix; a fixed
 /// family's spellings are complete type strings.
-struct FamilySpec {
-    family: MeasurementFamily,
+pub(in super::super) struct MeasurementFamilyDef {
+    pub(in super::super) family: MeasurementFamily,
     /// Canonical module-entry spelling.
     canonical: &'static str,
     /// Permanent module-entry aliases. The vendor-prefixed spelling is
@@ -45,15 +36,19 @@ struct FamilySpec {
     dimension: Dimension,
     /// Rego helpers the extraction rule calls. Emitted once per policy.
     helpers: &'static [&'static str],
+    /// Builds and validates one entry value for this family.
+    build: fn(&str, &str, &serde_json::Value) -> anyhow::Result<Measurement>,
+    /// The Rego extraction rule for this family.
+    extraction: &'static str,
 }
 
-impl FamilySpec {
+impl MeasurementFamilyDef {
     fn parameterized(&self) -> bool {
         self.canonical.ends_with('.')
     }
 }
 
-const TD_SHIM: FamilySpec = FamilySpec {
+const TD_SHIM: MeasurementFamilyDef = MeasurementFamilyDef {
     family: MeasurementFamily::TdxTdShim,
     canonical: "tdx.td-shim",
     aliases: &[],
@@ -61,9 +56,11 @@ const TD_SHIM: FamilySpec = FamilySpec {
     measurement_key: "tdx.td-shim",
     dimension: Dimension::Executables,
     helpers: &[],
+    build: build_td_shim,
+    extraction: TDX_TD_SHIM,
 };
 
-const OVMF: FamilySpec = FamilySpec {
+const OVMF: MeasurementFamilyDef = MeasurementFamilyDef {
     family: MeasurementFamily::TdxOvmf,
     canonical: "tdx.ovmf",
     aliases: &[],
@@ -71,9 +68,11 @@ const OVMF: FamilySpec = FamilySpec {
     measurement_key: "tdx.ovmf",
     dimension: Dimension::Executables,
     helpers: &[],
+    build: build_ovmf,
+    extraction: TDX_OVMF,
 };
 
-const KERNEL: FamilySpec = FamilySpec {
+const KERNEL: MeasurementFamilyDef = MeasurementFamilyDef {
     family: MeasurementFamily::TdxKernel,
     canonical: "tdx.kernel",
     aliases: &[],
@@ -81,9 +80,11 @@ const KERNEL: FamilySpec = FamilySpec {
     measurement_key: "tdx.kernel",
     dimension: Dimension::Executables,
     helpers: &[HAS_SHA384_DIGEST],
+    build: build_kernel,
+    extraction: TDX_KERNEL,
 };
 
-const UKI: FamilySpec = FamilySpec {
+const UKI: MeasurementFamilyDef = MeasurementFamilyDef {
     family: MeasurementFamily::TdxUki,
     canonical: "tdx.uki",
     aliases: &[],
@@ -91,9 +92,11 @@ const UKI: FamilySpec = FamilySpec {
     measurement_key: "tdx.uki",
     dimension: Dimension::Executables,
     helpers: &[HAS_SHA384_DIGEST],
+    build: build_uki,
+    extraction: TDX_UKI,
 };
 
-const ROOTFS_CC: FamilySpec = FamilySpec {
+const ROOTFS_CC: MeasurementFamilyDef = MeasurementFamilyDef {
     family: MeasurementFamily::RootfsCc,
     canonical: "com.alibabacloud.rootfs.cc",
     aliases: &["rootfs.cc"],
@@ -101,9 +104,11 @@ const ROOTFS_CC: FamilySpec = FamilySpec {
     measurement_key: "rootfs.cc",
     dimension: Dimension::FileSystem,
     helpers: &[],
+    build: build_rootfs_cc,
+    extraction: ROOTFS_CC_RULE,
 };
 
-const CONTAINER_IMAGE: FamilySpec = FamilySpec {
+const CONTAINER_IMAGE: MeasurementFamilyDef = MeasurementFamilyDef {
     family: MeasurementFamily::ContainerImage,
     canonical: "com.alibabacloud.container.image.",
     aliases: &["container.image."],
@@ -111,9 +116,11 @@ const CONTAINER_IMAGE: FamilySpec = FamilySpec {
     measurement_key: "container.image.",
     dimension: Dimension::Executables,
     helpers: &[IMAGE_REPO_NAME],
+    build: build_container_image,
+    extraction: CONTAINER_IMAGE_RULE,
 };
 
-const AI_MODEL: FamilySpec = FamilySpec {
+const AI_MODEL: MeasurementFamilyDef = MeasurementFamilyDef {
     family: MeasurementFamily::AiModel,
     canonical: "com.alibabacloud.ai.model.",
     aliases: &["ai.model."],
@@ -121,22 +128,14 @@ const AI_MODEL: FamilySpec = FamilySpec {
     measurement_key: "ai.model.",
     dimension: Dimension::Executables,
     helpers: &[],
+    build: build_ai_model,
+    extraction: AI_MODEL_RULE,
 };
 
-/// Every family in deterministic emission order. Declaration order is the
-/// order extraction rules render in.
-const FAMILIES: &[&FamilySpec] = &[
-    &TD_SHIM,
-    &OVMF,
-    &KERNEL,
-    &UKI,
-    &ROOTFS_CC,
-    &CONTAINER_IMAGE,
-    &AI_MODEL,
-];
-
 impl MeasurementFamily {
-    fn spec(self) -> &'static FamilySpec {
+    /// The registry row for this family. The match is exhaustive, so a new
+    /// `Measurement` variant cannot be added without registering it.
+    fn def(self) -> &'static MeasurementFamilyDef {
         match self {
             Self::TdxTdShim => &TD_SHIM,
             Self::TdxOvmf => &OVMF,
@@ -151,78 +150,161 @@ impl MeasurementFamily {
     /// The AR4SI dimension a value extracted by this family describes. Rootfs
     /// integrity is a file-system property; every other family measures what
     /// the platform executes.
-    pub(super) fn dimension(self) -> Dimension {
-        self.spec().dimension
+    pub(in super::super) fn dimension(self) -> Dimension {
+        self.def().dimension
     }
 
     /// The canonical type string for a module entry of this family. The name
     /// is empty for a fixed family.
-    pub(super) fn canonical_spelling(self, name: &str) -> String {
-        let spec = self.spec();
-        if spec.parameterized() {
-            format!("{}{name}", spec.canonical)
+    pub(in super::super) fn canonical_spelling(self, name: &str) -> String {
+        let def = self.def();
+        if def.parameterized() {
+            format!("{}{name}", def.canonical)
         } else {
-            spec.canonical.to_string()
+            def.canonical.to_string()
         }
     }
 
     /// The `actual_measurement` key for a module entry of this family. The
     /// vendor-prefixed families are recorded without their prefix so the key
     /// matches the transparency-log type spelling.
-    pub(super) fn measurement_key(self, name: &str) -> String {
-        let spec = self.spec();
-        if spec.parameterized() {
-            format!("{}{name}", spec.measurement_key)
+    pub(in super::super) fn measurement_key(self, name: &str) -> String {
+        let def = self.def();
+        if def.parameterized() {
+            format!("{}{name}", def.measurement_key)
         } else {
-            spec.measurement_key.to_string()
+            def.measurement_key.to_string()
         }
     }
+}
+
+fn build_td_shim(
+    raw_type: &str,
+    _name: &str,
+    value: &serde_json::Value,
+) -> anyhow::Result<Measurement> {
+    Ok(Measurement::TdxTdShim(Sha384Digest::parse(
+        raw_type, value,
+    )?))
+}
+
+fn build_ovmf(
+    raw_type: &str,
+    _name: &str,
+    value: &serde_json::Value,
+) -> anyhow::Result<Measurement> {
+    Ok(Measurement::TdxOvmf(Sha384Digest::parse(raw_type, value)?))
+}
+
+fn build_kernel(
+    raw_type: &str,
+    _name: &str,
+    value: &serde_json::Value,
+) -> anyhow::Result<Measurement> {
+    Ok(Measurement::TdxKernel(Sha384Digest::parse(
+        raw_type, value,
+    )?))
+}
+
+fn build_uki(
+    raw_type: &str,
+    _name: &str,
+    value: &serde_json::Value,
+) -> anyhow::Result<Measurement> {
+    Ok(Measurement::TdxUki(Sha384Digest::parse(raw_type, value)?))
+}
+
+fn build_rootfs_cc(
+    raw_type: &str,
+    _name: &str,
+    value: &serde_json::Value,
+) -> anyhow::Result<Measurement> {
+    Ok(Measurement::RootfsCc(Sha256Digest::parse(raw_type, value)?))
+}
+
+fn build_container_image(
+    raw_type: &str,
+    name: &str,
+    value: &serde_json::Value,
+) -> anyhow::Result<Measurement> {
+    Ok(Measurement::ContainerImage(
+        ContainerImageMeasurement::parse(raw_type, name, value)?,
+    ))
+}
+
+fn build_ai_model(
+    raw_type: &str,
+    name: &str,
+    value: &serde_json::Value,
+) -> anyhow::Result<Measurement> {
+    Ok(Measurement::AiModel(AiModelMeasurement::parse(
+        raw_type, name, value,
+    )?))
+}
+
+/// Build and validate one measurement entry value for `family`.
+pub(in super::super) fn build_measurement(
+    family: MeasurementFamily,
+    name: &str,
+    raw_type: &str,
+    value: &serde_json::Value,
+) -> anyhow::Result<Measurement> {
+    (family.def().build)(raw_type, name, value)
 }
 
 /// Resolve a module-entry type spelling to its family and name. Accepts the
 /// canonical spelling and every permanent alias; `None` means the type is a
 /// posture or transparency entry, or unknown.
-pub(super) fn parse_module_type(raw: &str) -> Option<(MeasurementFamily, &str)> {
-    for spec in FAMILIES {
-        if spec.parameterized() {
-            if let Some(name) = raw.strip_prefix(spec.canonical) {
-                return Some((spec.family, name));
+pub(in super::super) fn parse_module_type(raw: &str) -> Option<(MeasurementFamily, &str)> {
+    MeasurementFamily::iter().find_map(|family| {
+        let def = family.def();
+        if def.parameterized() {
+            if let Some(name) = raw.strip_prefix(def.canonical) {
+                return Some((def.family, name));
             }
-            for alias in spec.aliases {
+            for alias in def.aliases {
                 if let Some(name) = raw.strip_prefix(alias) {
-                    return Some((spec.family, name));
+                    return Some((def.family, name));
                 }
             }
-        } else if raw == spec.canonical || spec.aliases.contains(&raw) {
-            return Some((spec.family, ""));
+            None
+        } else if raw == def.canonical || def.aliases.contains(&raw) {
+            Some((def.family, ""))
+        } else {
+            None
         }
-    }
-    None
+    })
 }
 
 /// Resolve a `transparency_log.publishedMeasurements` type. Published types are
 /// a stricter subset than module entries: only the unprefixed spellings are
 /// recorded in a manifest, and a container image repository must be the single
 /// extracted segment.
-pub(super) fn parse_published_type(raw: &str) -> anyhow::Result<MeasurementFamily> {
-    for spec in FAMILIES {
-        let Some(published) = spec.published else {
-            continue;
-        };
-        if spec.parameterized() {
-            if let Some(repository_name) = raw.strip_prefix(published) {
-                if !is_valid_image_repo_name(repository_name) {
-                    anyhow::bail!(
-                        "publishedMeasurements type {raw:?} has invalid container image repository {repository_name:?}; use ASCII letters, digits, '.', '_' and '-'"
-                    );
-                }
-                return Ok(spec.family);
+pub(in super::super) fn parse_published_type(raw: &str) -> anyhow::Result<MeasurementFamily> {
+    MeasurementFamily::iter()
+        .find_map(|family| {
+            let def = family.def();
+            let published = def.published?;
+            if def.parameterized() {
+                let repository_name = raw.strip_prefix(published)?;
+                Some(
+                    is_valid_image_repo_name(repository_name)
+                        .then_some(def.family)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "publishedMeasurements type {raw:?} has invalid container image repository {repository_name:?}; use ASCII letters, digits, '.', '_' and '-'"
+                            )
+                        }),
+                )
+            } else if raw == published {
+                Some(Ok(def.family))
+            } else {
+                None
             }
-        } else if raw == published {
-            return Ok(spec.family);
-        }
-    }
-    anyhow::bail!("unsupported publishedMeasurements type {raw}")
+        })
+        .unwrap_or_else(|| {
+            anyhow::bail!("unsupported publishedMeasurements type {raw}")
+        })
 }
 
 /// Validate a `transparency_log.publishedMeasurements` type where the caller
@@ -233,13 +315,14 @@ pub(crate) fn validate_published_type(raw: &str) -> anyhow::Result<()> {
 
 /// The family a published type selects, without re-checking its spelling. Used
 /// to attribute a validated entry's dimensions and extraction rules.
-pub(super) fn family_for_published_type(raw: &str) -> Option<MeasurementFamily> {
-    FAMILIES.iter().find_map(|spec| {
-        let published = spec.published?;
-        if spec.parameterized() {
-            raw.strip_prefix(published).map(|_| spec.family)
+pub(in super::super) fn family_for_published_type(raw: &str) -> Option<MeasurementFamily> {
+    MeasurementFamily::iter().find_map(|family| {
+        let def = family.def();
+        let published = def.published?;
+        if def.parameterized() {
+            raw.strip_prefix(published).map(|_| def.family)
         } else if raw == published {
-            Some(spec.family)
+            Some(def.family)
         } else {
             None
         }
@@ -249,154 +332,34 @@ pub(super) fn family_for_published_type(raw: &str) -> Option<MeasurementFamily> 
 /// The AR4SI dimension a transparency-log published type describes. A
 /// transparency-log entry can publish several types; its predicate is
 /// attributed to every dimension this maps them to.
-pub(super) fn dimension_for_published_type(raw: &str) -> Option<Dimension> {
+pub(in super::super) fn dimension_for_published_type(raw: &str) -> Option<Dimension> {
     family_for_published_type(raw).map(MeasurementFamily::dimension)
 }
 
-/// The family a measurement module entry extracts from. Posture and
-/// transparency entries have no family of their own.
-pub(super) fn family_of_module(module: &Module) -> Option<MeasurementFamily> {
-    match module {
-        Module::TdShim { .. } => Some(MeasurementFamily::TdxTdShim),
-        Module::Ovmf { .. } => Some(MeasurementFamily::TdxOvmf),
-        Module::Kernel { .. } => Some(MeasurementFamily::TdxKernel),
-        Module::Uki { .. } => Some(MeasurementFamily::TdxUki),
-        Module::RootfsCc { .. } => Some(MeasurementFamily::RootfsCc),
-        Module::ContainerImage { .. } => Some(MeasurementFamily::ContainerImage),
-        Module::AiModel { .. } => Some(MeasurementFamily::AiModel),
-        Module::Tdx(_) | Module::Nvidia(_) | Module::Gpu | Module::TransparencyLog { .. } => None,
-    }
+/// The `actual_measurement` key for a measurement entry.
+pub(in super::super) fn measurement_key(measurement: &Measurement) -> String {
+    measurement.family().measurement_key(measurement.name())
 }
 
-/// The per-entry name a family's key takes: the repository or model id for a
-/// parameterized family, empty for a fixed one.
-fn measurement_name(module: &Module) -> Option<&str> {
-    match module {
-        Module::ContainerImage { repo, .. } => Some(repo),
-        Module::AiModel { model_id, .. } => Some(model_id),
-        Module::TdShim { .. }
-        | Module::Ovmf { .. }
-        | Module::Kernel { .. }
-        | Module::Uki { .. }
-        | Module::RootfsCc { .. } => Some(""),
-        Module::Tdx(_) | Module::Nvidia(_) | Module::Gpu | Module::TransparencyLog { .. } => None,
-    }
-}
-
-/// The `actual_measurement` key for a measurement module entry.
-pub(super) fn measurement_key(module: &Module) -> Option<String> {
-    let family = family_of_module(module)?;
-    let name = measurement_name(module)?;
-    Some(family.measurement_key(name))
-}
-
-/// The pinned value a single-valued measurement module entry compares against.
-fn measurement_pin(module: &Module) -> Option<&str> {
-    match module {
-        Module::TdShim { value }
-        | Module::Ovmf { value }
-        | Module::Kernel { value }
-        | Module::Uki { value } => Some(value),
-        Module::RootfsCc { value } => Some(value),
-        Module::AiModel { digest, .. } => Some(digest),
-        Module::ContainerImage { .. }
-        | Module::Tdx(_)
-        | Module::Nvidia(_)
-        | Module::Gpu
-        | Module::TransparencyLog { .. } => None,
-    }
-}
-
-/// Build and validate one measurement module entry. The entry type was already
-/// parsed into its family by the caller, so this only checks that `value` fits
-/// that family.
-pub(super) fn build_measurement_module(
-    family: MeasurementFamily,
-    name: &str,
-    raw_type: &str,
-    value: &serde_json::Value,
-) -> anyhow::Result<Module> {
-    let value_str = || match value {
-        serde_json::Value::String(s) => Ok(s.as_str()),
-        other => anyhow::bail!(
-            "module type {raw_type:?} expects a string value, got {}",
-            value_shape(other)
-        ),
-    };
-
-    let fixed_hex = |len: usize| -> anyhow::Result<String> {
-        let v = value_str()?;
-        if !is_lower_hex(v, len) {
-            anyhow::bail!("module type {raw_type:?} value must be {len} lowercase hex chars");
-        }
-        Ok(v.to_string())
-    };
-
-    match family {
-        MeasurementFamily::TdxTdShim => Ok(Module::TdShim {
-            value: fixed_hex(96)?,
-        }),
-        MeasurementFamily::TdxOvmf => Ok(Module::Ovmf {
-            value: fixed_hex(96)?,
-        }),
-        MeasurementFamily::TdxKernel => Ok(Module::Kernel {
-            value: fixed_hex(96)?,
-        }),
-        MeasurementFamily::TdxUki => Ok(Module::Uki {
-            value: fixed_hex(96)?,
-        }),
-        MeasurementFamily::RootfsCc => Ok(Module::RootfsCc {
-            value: fixed_hex(64)?,
-        }),
-        MeasurementFamily::ContainerImage => {
-            if !is_valid_image_repo_name(name) {
-                anyhow::bail!(
-                    "container.image name {name:?} must be a single repository segment using only ASCII letters, digits, '.', '_' and '-'"
-                );
-            }
-            let digest = value_str()?;
-            if !is_sha256_digest(digest) {
-                anyhow::bail!(
-                    "com.alibabacloud.container.image.{name} value must be sha256:<64 lowercase hex>"
-                );
-            }
-            Ok(Module::ContainerImage {
-                repo: name.to_string(),
-                digests: BTreeSet::from([digest.to_string()]),
-            })
-        }
-        MeasurementFamily::AiModel => {
-            if !is_valid_module_name(name) {
-                anyhow::bail!("ai.model name {name:?} has an invalid character");
-            }
-            let digest = fixed_hex(64)?;
-            Ok(Module::AiModel {
-                model_id: name.to_string(),
-                digest,
-            })
-        }
-    }
-}
-
-/// The matching rule for a measurement module entry, or `None` for a posture
-/// or transparency entry. A container image compares digest sets; every other
-/// family compares a single pinned value. The pinned values are spliced as Rego
-/// literals; validation in the entry parser guarantees they contain no quoting
-/// hazard.
-pub(super) fn predicate(module: &Module, pred: &str) -> Option<String> {
-    if let Module::ContainerImage { repo, digests } = module {
-        let key = format!("container.image.{repo}");
-        let expected = digests
+/// The matching rule for a measurement entry. A container image compares
+/// digest sets; every other family compares a single pinned value. The pinned
+/// values are spliced as Rego literals; validation in the entry parser
+/// guarantees they contain no quoting hazard.
+pub(in super::super) fn predicate(measurement: &Measurement, pred: &str) -> Option<String> {
+    if let Measurement::ContainerImage(image) = measurement {
+        let key = format!("container.image.{}", image.repo.as_str());
+        let expected = image
+            .digests
             .iter()
-            .map(|digest| format!("{digest:?}"))
+            .map(|digest| format!("{:?}", digest.as_str()))
             .collect::<Vec<_>>()
             .join(", ");
         return Some(format!(
             "{pred} if {{\n\tactual_measurement_set({key:?}) == {{{expected}}}\n}}"
         ));
     }
-    let key = measurement_key(module)?;
-    let pin = measurement_pin(module)?;
+    let key = measurement_key(measurement);
+    let pin = measurement.pin()?;
     Some(format!(
         "{pred} if {{\n\tactual_measurement({key:?}) == {pin:?}\n}}"
     ))
@@ -404,10 +367,10 @@ pub(super) fn predicate(module: &Module, pred: &str) -> Option<String> {
 
 /// The set of families a policy needs, with deterministic emission order.
 #[derive(Debug, Default, Clone)]
-pub(super) struct Families(BTreeSet<MeasurementFamily>);
+pub(in super::super) struct MeasurementFamilySet(BTreeSet<MeasurementFamily>);
 
-impl Families {
-    pub(super) fn insert(&mut self, family: MeasurementFamily) {
+impl MeasurementFamilySet {
+    pub(in super::super) fn insert(&mut self, family: MeasurementFamily) {
         self.0.insert(family);
     }
 
@@ -415,7 +378,7 @@ impl Families {
     /// need. Validation restricts those types to the families below, so an
     /// unrecognized spelling contributes nothing here (it is rejected earlier
     /// as a configuration error).
-    pub(super) fn extend_published_types<'a>(
+    pub(in super::super) fn extend_published_types<'a>(
         &mut self,
         types: impl IntoIterator<Item = &'a String>,
     ) {
@@ -429,25 +392,24 @@ impl Families {
     /// The Rego extraction source for the selected families, or an empty
     /// string when none are selected. Shared helpers come first, once each, in
     /// registry order; the extraction rules follow in the same order.
-    pub(super) fn rules(&self) -> String {
+    pub(in super::super) fn rules(&self) -> String {
         if self.0.is_empty() {
             return String::new();
         }
+        let selected: Vec<&MeasurementFamilyDef> = MeasurementFamily::iter()
+            .filter(|family| self.0.contains(family))
+            .map(MeasurementFamily::def)
+            .collect();
         let mut parts: Vec<&str> = Vec::new();
-        for spec in FAMILIES {
-            if !self.0.contains(&spec.family) {
-                continue;
-            }
-            for helper in spec.helpers {
+        for def in &selected {
+            for helper in def.helpers {
                 if !parts.contains(helper) {
                     parts.push(*helper);
                 }
             }
         }
-        for spec in FAMILIES {
-            if self.0.contains(&spec.family) {
-                parts.push(spec.family.rule());
-            }
+        for def in &selected {
+            parts.push(def.extraction);
         }
         let mut out = parts.join("\n\n");
         out.push('\n');
@@ -455,22 +417,8 @@ impl Families {
     }
 }
 
-impl MeasurementFamily {
-    fn rule(self) -> &'static str {
-        match self {
-            Self::TdxTdShim => TDX_TD_SHIM,
-            Self::TdxOvmf => TDX_OVMF,
-            Self::TdxKernel => TDX_KERNEL,
-            Self::TdxUki => TDX_UKI,
-            Self::RootfsCc => ROOTFS_CC_RULE,
-            Self::ContainerImage => CONTAINER_IMAGE_RULE,
-            Self::AiModel => AI_MODEL_RULE,
-        }
-    }
-}
-
 /// Name segment charset: letters, digits and `. _ / @ : + -`.
-fn is_valid_module_name(name: &str) -> bool {
+pub(in super::super) fn is_valid_module_name(name: &str) -> bool {
     !name.is_empty()
         && name.chars().all(|c| {
             c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '@' | ':' | '+' | '-')
@@ -481,7 +429,7 @@ fn is_valid_module_name(name: &str) -> bool {
 /// the last '/'-separated path component, with any tag or digest stripped.
 /// A name containing '/', '@', or ':' can never equal that segment, so it is
 /// rejected at load instead of failing closed only at appraisal.
-pub(super) fn is_valid_image_repo_name(name: &str) -> bool {
+pub(in super::super) fn is_valid_image_repo_name(name: &str) -> bool {
     !name.is_empty()
         && name
             .chars()
@@ -489,18 +437,10 @@ pub(super) fn is_valid_image_repo_name(name: &str) -> bool {
 }
 
 /// A lowercase hex string of exactly `len` characters.
-pub(super) fn is_lower_hex(s: &str, len: usize) -> bool {
+pub(in super::super) fn is_lower_hex(s: &str, len: usize) -> bool {
     s.len() == len
         && s.bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
-
-/// A `sha256:<64 lowercase hex>` OCI manifest digest.
-fn is_sha256_digest(s: &str) -> bool {
-    match s.strip_prefix("sha256:") {
-        Some(hex) => is_lower_hex(hex, 64),
-        None => false,
-    }
 }
 
 const HAS_SHA384_DIGEST: &str = "\
@@ -639,25 +579,27 @@ image_repo_name(ref) := name if {
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "crypto-rustcrypto")]
-    use super::super::super::super::test_fixtures::{
+    use super::super::super::super::super::test_fixtures::{
         aael_event, aael_event_for_reference, hex64, hex96, manifest, pai_tdx_input,
         rekor_entry_value, rootfs_event as rootfs_hash_event, td_payload_event, tdx_quote_input,
         transparency_entry, TDX_VENDOR_ID,
     };
     #[cfg(feature = "crypto-rustcrypto")]
-    use super::super::super::test_harness::{
+    use super::super::super::super::test_harness::{
         render_modules_json as render, render_rekor, resolved_from_manifest,
     };
     use serde_json::Value;
 
-    use super::super::super::super::test_fixtures::{pai_event_log_events, tdx_input_with_body};
-    use super::super::super::test_harness::eval_policy_vector;
+    use super::super::super::super::super::test_fixtures::{
+        pai_event_log_events, tdx_input_with_body,
+    };
+    use super::super::super::super::test_harness::eval_policy_vector;
     use super::*;
     use serde_json::json;
 
     /// Wrap the selected rules in a minimal policy that affirms `executables`
     /// only when every `(key, expected)` binding holds.
-    fn extraction_policy_for(families: &Families, bindings: &[(&str, &str)]) -> String {
+    fn extraction_policy_for(families: &MeasurementFamilySet, bindings: &[(&str, &str)]) -> String {
         let mut body = String::new();
         for (key, expected) in bindings {
             body.push_str(&format!("\tactual_measurement({key:?}) == {expected:?}\n"));
@@ -670,13 +612,17 @@ mod tests {
 
     /// Wrap the selected rules in a minimal policy that affirms `executables`
     /// when `actual_measurement(key)` equals `expected`.
-    fn extraction_policy(families: &Families, key: &str, expected: &str) -> String {
+    fn extraction_policy(families: &MeasurementFamilySet, key: &str, expected: &str) -> String {
         extraction_policy_for(families, &[(key, expected)])
     }
 
     /// Wrap the selected rules in a minimal policy that affirms `executables`
     /// when `actual_measurement_set(key)` equals `expected`.
-    fn extraction_set_policy(families: &Families, key: &str, expected: &[&str]) -> String {
+    fn extraction_set_policy(
+        families: &MeasurementFamilySet,
+        key: &str,
+        expected: &[&str],
+    ) -> String {
         let values = expected
             .iter()
             .map(|value| format!("{value:?}"))
@@ -688,8 +634,8 @@ mod tests {
         )
     }
 
-    fn families(list: &[MeasurementFamily]) -> Families {
-        let mut f = Families::default();
+    fn families(list: &[MeasurementFamily]) -> MeasurementFamilySet {
+        let mut f = MeasurementFamilySet::default();
         for family in list {
             f.insert(*family);
         }
@@ -727,10 +673,11 @@ mod tests {
 
     #[test]
     fn registry_owns_every_accepted_module_spelling() {
-        for spec in FAMILIES {
-            let (family, name) = parse_module_type(spec.canonical)
+        for family in MeasurementFamily::iter() {
+            let spec = family.def();
+            let (parsed_family, name) = parse_module_type(spec.canonical)
                 .unwrap_or_else(|| panic!("canonical spelling {} must parse", spec.canonical));
-            assert_eq!(family, spec.family);
+            assert_eq!(parsed_family, spec.family);
             assert_eq!(name, "", "a canonical prefix carries no entry name");
             let expected_name = if spec.parameterized() { "busybox" } else { "" };
             assert_eq!(
@@ -817,7 +764,7 @@ mod tests {
     #[test]
     fn family_selection_drives_emission() {
         // No family: no extraction source at all.
-        assert!(Families::default().rules().is_empty());
+        assert!(MeasurementFamilySet::default().rules().is_empty());
 
         // Static families need no helper.
         let shim = families(&[MeasurementFamily::TdxTdShim]).rules();
@@ -871,49 +818,55 @@ mod tests {
 
     #[test]
     fn key_mapping_drops_the_vendor_prefix() {
-        assert_eq!(
+        let kernel = build_measurement(
             MeasurementFamily::TdxKernel,
-            family_of_module(&Module::Kernel {
-                value: "a".repeat(96)
-            })
-            .unwrap()
-        );
-        let image = Module::ContainerImage {
-            repo: "model-server".to_string(),
-            digests: [format!("sha256:{}", "c".repeat(64))].into_iter().collect(),
-        };
-        assert_eq!(
-            measurement_key(&image).unwrap(),
-            "container.image.model-server"
-        );
-        let model = Module::AiModel {
-            model_id: "Qwen/Qwen3.8-27B".to_string(),
-            digest: "b".repeat(64),
-        };
-        assert_eq!(
-            measurement_key(&model).unwrap(),
-            "ai.model.Qwen/Qwen3.8-27B"
-        );
-        let rootfs = Module::RootfsCc {
-            value: "a".repeat(64),
-        };
-        assert_eq!(family_of_module(&rootfs), Some(MeasurementFamily::RootfsCc));
-        assert_eq!(measurement_key(&rootfs).unwrap(), "rootfs.cc");
+            "",
+            "tdx.kernel",
+            &json!("a".repeat(96)),
+        )
+        .unwrap();
+        assert_eq!(kernel.family(), MeasurementFamily::TdxKernel);
+        assert_eq!(measurement_key(&kernel), "tdx.kernel");
 
-        assert!(family_of_module(&Module::Gpu).is_none());
-        assert!(measurement_key(&Module::Gpu).is_none());
-        assert!(predicate(&Module::Gpu, "m_0_0").is_none());
+        let image = build_measurement(
+            MeasurementFamily::ContainerImage,
+            "model-server",
+            "com.alibabacloud.container.image.model-server",
+            &json!(format!("sha256:{}", "c".repeat(64))),
+        )
+        .unwrap();
+        assert_eq!(measurement_key(&image), "container.image.model-server");
+
+        let model = build_measurement(
+            MeasurementFamily::AiModel,
+            "Qwen/Qwen3.8-27B",
+            "com.alibabacloud.ai.model.Qwen/Qwen3.8-27B",
+            &json!("b".repeat(64)),
+        )
+        .unwrap();
+        assert_eq!(measurement_key(&model), "ai.model.Qwen/Qwen3.8-27B");
+
+        let rootfs = build_measurement(
+            MeasurementFamily::RootfsCc,
+            "",
+            "rootfs.cc",
+            &json!("a".repeat(64)),
+        )
+        .unwrap();
+        assert_eq!(rootfs.family(), MeasurementFamily::RootfsCc);
+        assert_eq!(measurement_key(&rootfs), "rootfs.cc");
     }
 
     #[test]
     fn predicate_is_a_single_equality() {
-        let rule = predicate(
-            &Module::Kernel {
-                value: "a".repeat(96),
-            },
-            "m_0_1",
+        let kernel = build_measurement(
+            MeasurementFamily::TdxKernel,
+            "",
+            "tdx.kernel",
+            &json!("a".repeat(96)),
         )
         .unwrap();
+        let rule = predicate(&kernel, "m_0_1").unwrap();
         assert_eq!(
             rule,
             format!(

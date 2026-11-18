@@ -1,182 +1,20 @@
-//! The `modules` attestation policy: entry parsing, validation, and Rego
-//! generation.
+//! The `modules` attestation policy: parse, resolve, and Rego generation.
 
-use self::families::Families;
-use super::super::policy_config::{
-    value_shape, GpuPostureConfig, ModuleEntryConfig, ModuleGroupsConfig, NvidiaPostureConfig,
-    TcbMinStatus, TdxBit, TdxCollateralConfig, TdxEventlog, TdxPostureConfig, TdxSeptVe,
-    TdxTcbConfig, TransparencyLogEntryConfig, TransparencyServiceConfig,
-};
-use super::super::transparency::{self, RekorBaseline};
+use super::super::policy_config::{ModuleGroupsConfig, TransparencyServiceConfig};
+use super::super::transparency;
 use crate::errors::*;
-use anyhow::Context;
-use std::collections::BTreeSet;
 
-pub(crate) mod families;
+use entry::EntryType;
+use hardware::HardwareCheck;
+use measurement::families::{self, MeasurementFamilySet};
+use measurement::Measurement;
+
+pub(crate) mod entry;
+pub(super) mod hardware;
+pub(crate) mod measurement;
 pub(crate) mod transparency_log;
 
-/// A parsed, validated measurement/posture module: the concrete variant the
-/// generator switches on.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Module {
-    /// `input.tdx.quote.body.mr_td` (TDX quote MRs), 96 hex.
-    TdShim {
-        value: String,
-    },
-    /// `input.tdx.quote.body.mr_td` (TDX quote MRs), 96 hex.
-    Ovmf {
-        value: String,
-    },
-    /// `td_payload` eventlog measurement, 96 hex.
-    Kernel {
-        value: String,
-    },
-    /// `EV_EFI_BOOT_SERVICES_APPLICATION` eventlog measurement, 96 hex.
-    Uki {
-        value: String,
-    },
-    /// `td_payload_info` boot-cmdline dm-verity root hash, 64 hex.
-    RootfsCc {
-        value: String,
-    },
-    /// AAEL `kangaroo/pull-image` digests for the named repo, each
-    /// `sha256:`64 hex. A repo may run several versions in one TD, so the
-    /// expected value is the whole set: evidence must report exactly these
-    /// digests, no more and no fewer.
-    ContainerImage {
-        repo: String,
-        digests: BTreeSet<String>,
-    },
-    /// AAEL `pai/load-model` hash for the named model, 64 hex.
-    AiModel {
-        model_id: String,
-        digest: String,
-    },
-    Tdx(TdxPostureConfig),
-    Nvidia(NvidiaPostureConfig),
-    /// `com.alibabacloud.gpu`: the guest-reported AAEL attestation event.
-    Gpu,
-    /// `transparency_log`: a ReleaseManifest baseline anchored in a
-    /// transparency log. Gates the dimensions implied by its published
-    /// measurement types; platform posture is expressed by a separate `tdx`
-    /// entry.
-    TransparencyLog {
-        config: TransparencyLogEntryConfig,
-        /// Verified rekor data for a rekor-v1 primary, filled by the resolve
-        /// phase. An artifact-server primary resolves its manifest at appraisal
-        /// time and stays `None`.
-        resolved: Option<RekorBaseline>,
-    },
-}
-
-impl Module {
-    /// The AR4SI dimensions this module gates. Measurement and posture
-    /// metadata come from the measurement-family registry; a transparency-log
-    /// entry gates every dimension its published types imply.
-    fn dimensions(&self) -> std::collections::BTreeSet<Dimension> {
-        if let Some(family) = families::family_of_module(self) {
-            return std::iter::once(family.dimension()).collect();
-        }
-        match self {
-            Module::TransparencyLog { config, .. } => config
-                .published_measurements
-                .iter()
-                .filter_map(|t| families::dimension_for_published_type(t))
-                .collect(),
-            _ => std::iter::once(Dimension::Hardware).collect(),
-        }
-    }
-
-    /// The TEE platform this entry's evidence is rooted at. Every current
-    /// variant reads from `input.tdx`: the quote and event-log measurements,
-    /// the AAEL event-log families, and the evaluated `nvidia_gpu.*` claims.
-    fn platform(&self) -> Platform {
-        Platform::Tdx
-    }
-}
-
-/// TEE platforms a module entry can depend on. Only TDX exists today; the
-/// generated policy uses the platform's recognition predicate as the hardware
-/// base, and a second platform would add its own variant and predicate.
-enum Platform {
-    Tdx,
-}
-
-impl Platform {
-    /// The predicate that recognises this platform in the appraisal input.
-    fn recognition(&self) -> &'static str {
-        match self {
-            Platform::Tdx => "tdx_recognized",
-        }
-    }
-
-    /// The Rego helper that defines [`Self::recognition`].
-    fn recognition_rule(&self) -> &'static str {
-        match self {
-            Platform::Tdx => {
-                "tdx_recognized if {\n\tinput.tdx.quote.header.tee_type == \"81000000\"\n\tinput.tdx.quote.header.vendor_id == \"939a7233f79c4ca9940a0db3957f0607\"\n}"
-            }
-        }
-    }
-}
-
-/// A module entry type, parsed from the raw `type` string in one place.
-/// Measurement families come from the family registry, which owns every
-/// accepted spelling and its canonical form.
-enum EntryType<'a> {
-    Tdx,
-    Nvidia,
-    AlibabaGpu,
-    Measurement {
-        family: families::MeasurementFamily,
-        name: &'a str,
-    },
-    TransparencyLog,
-}
-
-impl<'a> EntryType<'a> {
-    fn parse(raw: &'a str) -> anyhow::Result<Self> {
-        match raw {
-            "com.alibabacloud.gpu" => Ok(Self::AlibabaGpu),
-            "tdx" => Ok(Self::Tdx),
-            "nvidia" => Ok(Self::Nvidia),
-            "transparency_log" => Ok(Self::TransparencyLog),
-            _ => families::parse_module_type(raw)
-                .map(|(family, name)| Self::Measurement { family, name })
-                .ok_or_else(|| unknown_module_type(raw)),
-        }
-    }
-
-    /// The canonical type spelling. Only the vendor-coupled entries carry the
-    /// `com.alibabacloud.` prefix in their canonical form.
-    fn canonical(&self) -> String {
-        match self {
-            Self::Tdx => "tdx".to_string(),
-            Self::Nvidia => "nvidia".to_string(),
-            Self::AlibabaGpu => "com.alibabacloud.gpu".to_string(),
-            Self::Measurement { family, name } => family.canonical_spelling(name),
-            Self::TransparencyLog => "transparency_log".to_string(),
-        }
-    }
-
-    /// Whether the entry may repeat within one group. `transparency_log`
-    /// entries are separate baselines AND-ed together, and repeated container
-    /// image entries for one repo coalesce into one digest set.
-    fn may_repeat(&self) -> bool {
-        matches!(
-            self,
-            Self::TransparencyLog
-                | Self::Measurement {
-                    family: families::MeasurementFamily::ContainerImage,
-                    ..
-                }
-        )
-    }
-}
-
-fn unknown_module_type(raw: &str) -> anyhow::Error {
-    anyhow::anyhow!("unknown module type {raw:?}")
-}
+pub(crate) use entry::ModuleEntry;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum Dimension {
@@ -185,143 +23,36 @@ pub(super) enum Dimension {
     Hardware,
 }
 
-impl ModuleEntryConfig {
-    /// Test helper: parse the type spelling and convert in one step, mirroring
-    /// what `parse_module_groups` does.
-    #[cfg(test)]
-    fn to_module_parsed(&self) -> anyhow::Result<Module> {
-        self.to_module(EntryType::parse(&self.module_type)?)
+/// The TEE platform a module entry's evidence is rooted at. Only TDX exists
+/// today; the generated policy uses the platform's recognition predicate as
+/// the hardware base, and a second platform would add its own variant and
+/// predicate.
+pub(super) enum Platform {
+    Tdx,
+}
+
+impl Platform {
+    /// The predicate that recognises this platform in the appraisal input.
+    pub(super) fn recognition(&self) -> &'static str {
+        match self {
+            Platform::Tdx => "tdx_recognized",
+        }
     }
 
-    /// Validate one entry's value and build a [`Module`]. The type spelling was
-    /// already parsed into an [`EntryType`] by the caller, so this only checks
-    /// the value shape against that family.
-    fn to_module(&self, entry_type: EntryType<'_>) -> anyhow::Result<Module> {
-        let value_obj = || match &self.value {
-            serde_json::Value::Object(_) => Ok(()),
-            other => anyhow::bail!(
-                "module type {:?} expects an object value, got {}",
-                self.module_type,
-                value_shape(other)
-            ),
-        };
-
-        match entry_type {
-            EntryType::Measurement { family, name } => {
-                families::build_measurement_module(family, name, &self.module_type, &self.value)
-            }
-            EntryType::Tdx => {
-                value_obj()?;
-                let cfg: TdxPostureConfig = serde_json::from_value(self.value.clone())
-                    .context("invalid tdx posture config")?;
-                if let Some(coll) = &cfg.collateral {
-                    if let Some(date) = &coll.min_tcb_date {
-                        if iso_date_to_epoch_secs(date).is_none() {
-                            anyhow::bail!("tdx collateral min_tcb_date {date:?} is not YYYY-MM-DD");
-                        }
-                    }
-                }
-                Ok(Module::Tdx(cfg))
-            }
-            EntryType::AlibabaGpu => {
-                value_obj()?;
-                let _: GpuPostureConfig = serde_json::from_value(self.value.clone())
-                    .context("invalid com.alibabacloud.gpu config")?;
-                Ok(Module::Gpu)
-            }
-            EntryType::Nvidia => {
-                value_obj()?;
-                let cfg: NvidiaPostureConfig = serde_json::from_value(self.value.clone())
-                    .context("invalid nvidia posture config")?;
-                // `min_count` 0 would accept an empty GPU set. Omitting the
-                // entry entirely is the documented way to disable GPU
-                // appraisal, so a present entry must require at least one GPU.
-                if cfg.min_count == 0 {
-                    anyhow::bail!("nvidia min_count must be at least 1");
-                }
-                for d in &cfg.measurement_digest {
-                    if !families::is_lower_hex(d, 96) {
-                        anyhow::bail!(
-                            "nvidia measurement_digest entries must be 96 lowercase hex chars"
-                        );
-                    }
-                }
-                Ok(Module::Nvidia(cfg))
-            }
-            EntryType::TransparencyLog => {
-                value_obj()?;
-                let cfg: TransparencyLogEntryConfig = serde_json::from_value(self.value.clone())
-                    .context("invalid transparency_log config")?;
-                Ok(Module::TransparencyLog {
-                    config: cfg,
-                    resolved: None,
-                })
+    /// The Rego helper that defines [`Self::recognition`].
+    pub(super) fn recognition_rule(&self) -> &'static str {
+        match self {
+            Platform::Tdx => {
+                "tdx_recognized if {\n\tinput.tdx.quote.header.tee_type == \"81000000\"\n\tinput.tdx.quote.header.vendor_id == \"939a7233f79c4ca9940a0db3957f0607\"\n}"
             }
         }
     }
 }
 
-/// Parse and validate every group. Rejects an unknown type, a value whose
-/// shape/charset is wrong, or a duplicate module type within the same group.
-/// `transparency_log` and `container.image.<repo>` may repeat: repeated image
-/// entries for one repo merge into a single module whose digest set is the
-/// union of their values, so the group renders one set-equality predicate per
-/// repo. Cross-group duplication is legal (each group is an independent
-/// baseline).
-pub(crate) fn parse_module_groups(config: &ModuleGroupsConfig) -> anyhow::Result<Vec<Vec<Module>>> {
-    let mut groups = Vec::new();
-    for (gi, group) in config.as_groups().into_iter().enumerate() {
-        // Duplicate detection is a structural check and runs before value
-        // validation, so a repeated type is reported even when a value is also
-        // malformed. Parsing to EntryType first makes the canonical spelling
-        // and its alias collide within one group.
-        let mut seen = std::collections::HashSet::new();
-        let mut entry_types = Vec::with_capacity(group.len());
-        for entry in group {
-            let entry_type = EntryType::parse(&entry.module_type)?;
-            // `transparency_log` may repeat within one group: several
-            // log-anchored baselines are AND-ed (every one must verify),
-            // unlike the single-baseline measurement and posture types.
-            // `container.image.<repo>` may repeat too, but those entries
-            // coalesce below. Both spellings of one repo normalize to the same
-            // type, so they merge as well.
-            if !entry_type.may_repeat() && !seen.insert(entry_type.canonical()) {
-                anyhow::bail!(
-                    "duplicate module type {:?} within group {gi}",
-                    entry_type.canonical()
-                );
-            }
-            entry_types.push(entry_type);
-        }
-        let mut parsed: Vec<Module> = Vec::new();
-        let mut image_positions = std::collections::HashMap::new();
-        for (entry, entry_type) in group.iter().zip(entry_types) {
-            let module = entry.to_module(entry_type)?;
-            if let Module::ContainerImage { repo, digests } = module {
-                match image_positions.get(&repo).copied() {
-                    Some(position) => {
-                        if let Module::ContainerImage {
-                            digests: existing, ..
-                        } = &mut parsed[position]
-                        {
-                            existing.extend(digests);
-                        }
-                    }
-                    None => {
-                        image_positions.insert(repo.clone(), parsed.len());
-                        parsed.push(Module::ContainerImage { repo, digests });
-                    }
-                }
-            } else {
-                parsed.push(module);
-            }
-        }
-        groups.push(parsed);
-    }
-    Ok(groups)
-}
-
-/// Build the `modules` Rego policy.
+/// Build the `modules` Rego policy in three phases: parse the config into the
+/// typed entries, prepare the per-entry data that needs no cache, then render.
+/// Rekor-v1 transparency primaries are fetched between prepare and render;
+/// they are the only load-time I/O.
 ///
 /// Each entry emits an entry predicate and gates one or more AR4SI dimensions:
 /// measurements gate `executables`, except `rootfs.cc` which gates
@@ -344,19 +75,88 @@ pub(crate) fn parse_module_groups(config: &ModuleGroupsConfig) -> anyhow::Result
 /// its log entry during the resolve phase. An artifact-server primary defers to
 /// appraisal time and does no I/O at load.
 pub(super) async fn build_modules_policy(config: &ModuleGroupsConfig) -> Result<String> {
-    // Parse and validate the config, resolve the rekor primaries (the only
-    // load-time I/O), then render from the fully-resolved module tree.
+    // Parse and validate the config, resolve the cache-free per-entry data and
+    // the rekor primaries (the only load-time I/O), then render from the
+    // fully-resolved module tree.
     let mut groups = parse_module_groups(config).map_err(Error::BuiltinPolicyTemplateFailed)?;
+    prepare_module_groups(&mut groups).map_err(Error::BuiltinPolicyTemplateFailed)?;
     resolve_module_groups(&mut groups).await?;
     render_modules_policy(&groups).map_err(Error::BuiltinPolicyTemplateFailed)
+}
+
+/// Parse and validate every group. Rejects an unknown type, a value whose
+/// shape/charset is wrong, or a duplicate module type within the same group.
+/// `transparency_log` and `container.image.<repo>` may repeat: repeated image
+/// entries for one repo merge into a single entry whose digest set is the
+/// union of their values, so the group renders one set-equality predicate per
+/// repo. Cross-group duplication is legal (each group is an independent
+/// baseline).
+pub(crate) fn parse_module_groups(
+    config: &ModuleGroupsConfig,
+) -> anyhow::Result<Vec<Vec<ModuleEntry>>> {
+    let mut groups = Vec::new();
+    for (gi, group) in config.as_groups().into_iter().enumerate() {
+        // Duplicate detection is a structural check and runs before value
+        // validation, so a repeated type is reported even when a value is also
+        // malformed. Parsing to EntryType first makes the canonical spelling
+        // and its alias collide within one group.
+        let mut seen = std::collections::HashSet::new();
+        for entry in group {
+            let entry_type = EntryType::parse(&entry.module_type)?;
+            // `transparency_log` may repeat within one group: several
+            // log-anchored baselines are AND-ed (every one must verify),
+            // unlike the single-baseline measurement and posture types.
+            // `container.image.<repo>` may repeat too, but those entries
+            // coalesce below. Both spellings of one repo normalize to the same
+            // type, so they merge as well.
+            if !entry_type.may_repeat() && !seen.insert(entry_type.canonical()) {
+                anyhow::bail!(
+                    "duplicate module type {:?} within group {gi}",
+                    entry_type.canonical()
+                );
+            }
+        }
+        let mut parsed: Vec<ModuleEntry> = Vec::new();
+        let mut image_positions = std::collections::HashMap::new();
+        for entry in group {
+            let module = ModuleEntry::parse(entry)?;
+            if let ModuleEntry::Measurement(Measurement::ContainerImage(image)) = module {
+                match image_positions.get(&image.repo).copied() {
+                    Some(position) => {
+                        if let ModuleEntry::Measurement(Measurement::ContainerImage(existing)) =
+                            &mut parsed[position]
+                        {
+                            existing.digests.extend(image.digests);
+                        }
+                    }
+                    None => {
+                        image_positions.insert(image.repo.clone(), parsed.len());
+                        parsed.push(ModuleEntry::Measurement(Measurement::ContainerImage(image)));
+                    }
+                }
+            } else {
+                parsed.push(module);
+            }
+        }
+        groups.push(parsed);
+    }
+    Ok(groups)
+}
+
+/// Resolve every entry's cache-free derived data before rendering.
+pub(crate) fn prepare_module_groups(groups: &mut [Vec<ModuleEntry>]) -> anyhow::Result<()> {
+    for entry in groups.iter_mut().flatten() {
+        entry.prepare()?;
+    }
+    Ok(())
 }
 
 /// Load the verification baseline for every rekor-v1 primary through the
 /// transparency seam, storing it on the module entry. An artifact-server
 /// primary resolves at appraisal time and stays unresolved here.
-async fn resolve_module_groups(groups: &mut [Vec<Module>]) -> Result<()> {
+async fn resolve_module_groups(groups: &mut [Vec<ModuleEntry>]) -> Result<()> {
     for module in groups.iter_mut().flatten() {
-        if let Module::TransparencyLog { config, resolved } = module {
+        if let ModuleEntry::TransparencyLog { config, resolved } = module {
             let service = config.services.first().ok_or_else(|| {
                 Error::TransparencyLogFetchFailed(anyhow::anyhow!("services must be non-empty"))
             })?;
@@ -376,7 +176,7 @@ async fn resolve_module_groups(groups: &mut [Vec<Module>]) -> Result<()> {
 /// Render a policy from a parsed module tree, performing no I/O. A rekor-v1
 /// transparency entry renders from its resolved data; an artifact-server
 /// primary renders the appraisal-time resolve path.
-pub(super) fn render_modules_policy(groups: &[Vec<Module>]) -> anyhow::Result<String> {
+pub(crate) fn render_modules_policy(groups: &[Vec<ModuleEntry>]) -> anyhow::Result<String> {
     let mut helpers: Vec<String> = Vec::new();
     let mut group_dimension_rules: Vec<String> = Vec::new();
     let mut executables_rules: Vec<String> = Vec::new();
@@ -388,7 +188,7 @@ pub(super) fn render_modules_policy(groups: &[Vec<Module>]) -> anyhow::Result<St
     // whole policy. Measurement entries select their own family;
     // transparency_log entries contribute the families their declared
     // published types need.
-    let mut families = Families::default();
+    let mut families = MeasurementFamilySet::default();
     // The platform the policy depends on. No entry means no dependency and no
     // recognition predicate is emitted. While only one platform exists, one
     // shared recognition block covers every group; when a second platform
@@ -403,25 +203,25 @@ pub(super) fn render_modules_policy(groups: &[Vec<Module>]) -> anyhow::Result<St
             let pred = format!("m_{gi}_{j}");
             policy_platform.get_or_insert_with(|| module.platform());
             let body = match module {
-                Module::Tdx(cfg) => {
-                    let (body, extra) = tdx_posture_rule(cfg, &pred)?;
-                    helpers.extend(extra);
-                    body
+                ModuleEntry::Measurement(measurement) => {
+                    families.insert(measurement.family());
+                    families::predicate(measurement, &pred).ok_or_else(|| {
+                        anyhow::anyhow!("measurement entry has no match predicate")
+                    })?
                 }
-                Module::Nvidia(cfg) => nvidia_posture_rule(cfg, &pred),
-                Module::Gpu => gpu_posture_rule(&pred),
-                Module::TransparencyLog { config, resolved } => {
+                ModuleEntry::HardwareCheck(check) => match check {
+                    HardwareCheck::Tdx(cfg) => {
+                        let (body, extra) = hardware::tdx_posture_rule(cfg, &pred)?;
+                        helpers.extend(extra);
+                        body
+                    }
+                    HardwareCheck::Nvidia(cfg) => hardware::nvidia_posture_rule(cfg, &pred),
+                    HardwareCheck::AlibabaGpu => hardware::gpu_posture_rule(&pred),
+                },
+                ModuleEntry::TransparencyLog { config, resolved } => {
                     families.extend_published_types(&config.published_measurements);
                     let prefix = format!("t_{gi}_{j}");
                     transparency_log::build_entry_rules(config, resolved.as_ref(), &pred, &prefix)?
-                }
-                measurement => {
-                    if let Some(family) = families::family_of_module(measurement) {
-                        families.insert(family);
-                    }
-                    families::predicate(measurement, &pred).ok_or_else(|| {
-                        anyhow::anyhow!("posture module passed to the measurement emitter")
-                    })?
                 }
             };
             for dimension in module.dimensions() {
@@ -557,233 +357,6 @@ fn indent(items: &[String]) -> String {
         .join("\n")
 }
 
-/// Emit the `name if { ... }` rule for a `tdx` posture entry plus helper rules
-/// for the disjunctive checks (service-TD zero, rejected advisories). Every
-/// field defaults to its strict choice; a field that "allows"/"optionals" adds
-/// no constraint. There is no `nonce_binding` field: the `report_data` session
-/// binding is enforced unconditionally by the verifier's `runtime_data` path,
-/// so it is not a policy knob and is not emitted here.
-fn tdx_posture_rule(cfg: &TdxPostureConfig, name: &str) -> anyhow::Result<(String, Vec<String>)> {
-    let mut body: Vec<String> = Vec::new();
-    let mut extra: Vec<String> = Vec::new();
-
-    if cfg.debug == TdxBit::Deny {
-        body.push(
-            "\tregex.match(\"^[0-9a-f][02468ace]\", input.tdx.quote.body.td_attributes)"
-                .to_string(),
-        );
-    }
-    if cfg.sept_ve_disable == TdxSeptVe::Require {
-        body.push(
-            "\tregex.match(\"^[0-9a-f]{6}[13579bdf]\", input.tdx.quote.body.td_attributes)"
-                .to_string(),
-        );
-    }
-    if cfg.perfmon == TdxBit::Deny {
-        body.push(
-            "\tregex.match(\"^[0-9a-f]{14}[0-7]\", input.tdx.quote.body.td_attributes)".to_string(),
-        );
-    }
-    if cfg.service_td == TdxBit::Deny {
-        let helper = format!("{name}_svc_td");
-        body.push(format!("\t{helper}"));
-        extra.push(format!(
-            r#"{helper} if {{
-	not input.tdx.quote.body.mr_servicetd
-}}
-
-{helper} if {{
-	regex.match("^0{{96}}$", input.tdx.quote.body.mr_servicetd)
-}}"#
-        ));
-    }
-
-    // TCB gate (opt-in). A revoked status always rejects; `up_to_date` further
-    // rejects the out-of-date ranks. `advisory_ids` is a comma-joined string.
-    if let Some(tcb) = &cfg.tcb {
-        body.push("\tv := input.tdx.tcb_verification".to_string());
-        body.push("\tv.tcb_status != \"Revoked\"".to_string());
-        if tcb.min_status == TcbMinStatus::UpToDate {
-            body.push(
-                "\tv.tcb_status in [\"UpToDate\", \"ConfigurationNeeded\", \"SWHardeningNeeded\", \"ConfigurationAndSWHardeningNeeded\"]".to_string(),
-            );
-        }
-        if !tcb.reject_advisories.is_empty() {
-            let helper = format!("{name}_adv");
-            let reject = rego_string_array(&tcb.reject_advisories);
-            let allow = rego_string_array(&tcb.allow_advisories);
-            body.push(format!("\tnot {helper}"));
-            extra.push(format!(
-                r#"{helper} if {{
-	some a in {reject}
-	a in split(input.tdx.tcb_verification.advisory_ids, ",")
-	not a in {allow}
-}}"#
-            ));
-        }
-    }
-
-    // Collateral gate (opt-in). All thresholds are compared against the
-    // epoch-second fields that the native TDX verifier places in
-    // `tcb_verification`.
-    if let Some(coll) = &cfg.collateral {
-        body.push("\tvc := input.tdx.tcb_verification".to_string());
-        if !coll.allow_expired {
-            body.push("\tvc.collateral_expired == false".to_string());
-        }
-        if let Some(date) = &coll.min_tcb_date {
-            let epoch = iso_date_to_epoch_secs(date).with_context(|| {
-                format!("validated tdx collateral min_tcb_date {date:?} is not convertible to epoch seconds")
-            })?;
-            body.push(format!("\tvc.tcb_level_date_tag >= {epoch}"));
-        }
-        if let Some(days) = coll.max_collateral_age_days {
-            let secs = days as i64 * 86400;
-            body.push(format!(
-                "\t(time.now_ns() / 1000000000) - vc.latest_issue_date <= {secs}"
-            ));
-        }
-    }
-
-    if cfg.eventlog == TdxEventlog::Required {
-        body.push("\tcount(input.tdx.uefi_event_logs) > 0".to_string());
-    }
-
-    if body.is_empty() {
-        return Ok((format!("{name} if {{\n\ttrue\n}}"), extra));
-    }
-    Ok((format!("{name} if {{\n{}\n}}", body.join("\n")), extra))
-}
-
-/// Emit the `com.alibabacloud.gpu` rule: the guest-reported AAEL GPU
-/// attestation event must exist and every such event must report zero for both
-/// result codes.
-fn gpu_posture_rule(pred: &str) -> String {
-    format!(
-        r#"{pred} if {{
-	events := [e |
-		some e in input.tdx.uefi_event_logs
-		e.type_name == "EV_EVENT_TAG"
-		e.details.unicode_name == "AAEL"
-		e.details.data.domain == "alibabacloud.com"
-		e.details.data.operation == "gpu/attestation"
-	]
-	count(events) > 0
-	every e in events {{
-		e.details.data.content["gpu-collect-evidence-result-code"] == 0
-		e.details.data.content["gpu-attest-result-code"] == 0
-	}}
-}}"#
-    )
-}
-
-/// Emit the `nvidia` posture rule: the standard trustee NVIDIA appraisal over
-/// the evaluated per-GPU claims, rejecting the raw/skip passthrough form (which
-/// carries attestation_report and lacks measurement).
-fn nvidia_posture_rule(cfg: &NvidiaPostureConfig, pred: &str) -> String {
-    let mut gpu_body: Vec<String> = Vec::new();
-    gpu_body.push("\t\tnot g.attestation_report".to_string());
-    if cfg.require_report {
-        gpu_body.push("\t\tg.measurement".to_string());
-    }
-    if cfg.require_cc_mode {
-        gpu_body.push("\t\tg.cc_enabled == true".to_string());
-    }
-    if !cfg.allow_uuids.is_empty() {
-        gpu_body.push(format!(
-            "\t\tg.uuid in {}",
-            rego_string_array(&cfg.allow_uuids)
-        ));
-    }
-    if !cfg.allow_driver_versions.is_empty() {
-        gpu_body.push(format!(
-            "\t\tg.driver_version in {}",
-            rego_string_array(&cfg.allow_driver_versions)
-        ));
-    }
-    if !cfg.allow_vbios_versions.is_empty() {
-        gpu_body.push(format!(
-            "\t\tg.vbios_version in {}",
-            rego_string_array(&cfg.allow_vbios_versions)
-        ));
-    }
-    if !cfg.measurement_digest.is_empty() {
-        gpu_body.push(format!(
-            "\t\tg.measurement in {}",
-            rego_string_array(&cfg.measurement_digest)
-        ));
-    }
-    let gpu_conj = gpu_body.join("\n");
-    format!(
-        r#"{pred} if {{
-	gpus := [g |
-		g := input.tdx[k]
-		startswith(k, "nvidia_gpu.")
-	]
-	count(gpus) >= {min}
-	every g in gpus {{
-{inner}
-	}}
-}}"#,
-        min = cfg.min_count,
-        inner = gpu_conj
-    )
-}
-
-/// Render a slice of strings as a Rego array literal.
-fn rego_string_array(items: &[String]) -> String {
-    let inner = items
-        .iter()
-        .map(|s| format!("{s:?}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("[{inner}]")
-}
-
-/// Convert a strict `YYYY-MM-DD` date to Unix epoch seconds (UTC midnight).
-/// Returns `None` for anything else, including a calendar-invalid day (e.g.
-/// `2026-02-31`), which the caller surfaces as a config error.
-fn iso_date_to_epoch_secs(date: &str) -> Option<i64> {
-    let bytes = date.as_bytes();
-    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
-        return None;
-    }
-    // Positions 4 and 7 are the separators; every other byte must be an ASCII
-    // digit, which also keeps the fixed-offset slices below on char boundaries.
-    if !bytes
-        .iter()
-        .enumerate()
-        .all(|(i, b)| i == 4 || i == 7 || b.is_ascii_digit())
-    {
-        return None;
-    }
-    let year: i64 = date[0..4].parse().ok()?;
-    let month: i64 = date[5..7].parse().ok()?;
-    let day: i64 = date[8..10].parse().ok()?;
-    if !(1..=12).contains(&month) {
-        return None;
-    }
-    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
-    let max_day = match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if leap => 29,
-        2 => 28,
-        _ => return None,
-    };
-    if !(1..=max_day).contains(&day) {
-        return None;
-    }
-    // Civil-days algorithm (Howard Hinnant) for days since 1970-01-01.
-    let y = if month <= 2 { year - 1 } else { year };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let mp = (month + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    Some((era * 146097 + doe - 719468) * 86400)
-}
-
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "crypto-rustcrypto")]
@@ -796,13 +369,29 @@ mod tests {
     };
 
     use super::super::test_harness::eval_policy_vector;
+    use super::entry::{unknown_module_type, EntryType, ModuleEntry};
+    use super::hardware::{iso_date_to_epoch_secs, HardwareCheck};
+    use super::measurement::Measurement;
+    use super::Platform;
     use super::*;
     use crate::tee::coco::converter::builtin::converter::BuiltinCocoConverter;
     use crate::tee::coco::converter::builtin::policy_config::{
-        PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
+        ModuleEntryConfig, PolicyConfig, ReferenceValueConfig, SampleProvenancePayloadConfig,
     };
     use reference_value_provider_service::extractors::extractor_modules::sample::Provenance;
     use serde_json::json;
+
+    /// Test-local convenience so the validation cases can parse a single entry
+    /// without going through a whole group.
+    trait ParseEntry {
+        fn to_module_parsed(&self) -> anyhow::Result<ModuleEntry>;
+    }
+
+    impl ParseEntry for ModuleEntryConfig {
+        fn to_module_parsed(&self) -> anyhow::Result<ModuleEntry> {
+            ModuleEntry::parse(self)
+        }
+    }
 
     // --- modules policy -----------------------------------------------------
 
@@ -813,7 +402,8 @@ mod tests {
     /// Render a policy without network I/O. None of these tests use a
     /// `transparency_log` entry, so no resolved rekor data is needed.
     fn build_policy(config: &ModuleGroupsConfig) -> anyhow::Result<String> {
-        let groups = parse_module_groups(config)?;
+        let mut groups = parse_module_groups(config)?;
+        prepare_module_groups(&mut groups)?;
         render_modules_policy(&groups)
     }
 
@@ -1145,13 +735,13 @@ mod tests {
         }
         .to_module_parsed()
         .expect("empty nvidia value must parse");
-        let Module::Nvidia(cfg) = module else {
+        let ModuleEntry::HardwareCheck(HardwareCheck::Nvidia(cfg)) = module else {
             panic!("expected Nvidia");
         };
-        assert!(cfg.require_cc_mode);
-        assert!(cfg.require_report);
-        assert_eq!(cfg.min_count, 1);
-        assert!(cfg.allow_uuids.is_empty());
+        assert!(cfg.posture.require_cc_mode);
+        assert!(cfg.posture.require_report);
+        assert_eq!(cfg.posture.min_count, 1);
+        assert!(cfg.posture.allow_uuids.is_empty());
 
         // The removed `verify` switch is now an unknown field.
         let err = ModuleEntryConfig {
@@ -1447,12 +1037,16 @@ mod tests {
         let groups = parse_module_groups(&mixed).expect("repeated image type must be legal");
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].len(), 1, "one module per repo");
-        let Module::ContainerImage { repo, digests } = &groups[0][0] else {
+        let ModuleEntry::Measurement(Measurement::ContainerImage(image)) = &groups[0][0] else {
             panic!("expected ContainerImage");
         };
-        assert_eq!(repo, "runtime");
+        assert_eq!(image.repo.as_str(), "runtime");
         assert_eq!(
-            digests.iter().cloned().collect::<Vec<_>>(),
+            image
+                .digests
+                .iter()
+                .map(|digest| digest.as_str().to_string())
+                .collect::<Vec<_>>(),
             vec![digest_a.clone(), digest_b.clone()],
             "digests are deduplicated and held in ascending order"
         );
@@ -1468,11 +1062,13 @@ mod tests {
         assert_eq!(parsed[0].len(), 2);
         assert!(matches!(
             &parsed[0][0],
-            Module::ContainerImage { repo, .. } if repo == "runtime"
+            ModuleEntry::Measurement(Measurement::ContainerImage(image))
+                if image.repo.as_str() == "runtime"
         ));
         assert!(matches!(
             &parsed[0][1],
-            Module::ContainerImage { repo, .. } if repo == "busybox"
+            ModuleEntry::Measurement(Measurement::ContainerImage(image))
+                if image.repo.as_str() == "busybox"
         ));
 
         // Cross-group duplication is still legal.
@@ -1670,6 +1266,24 @@ mod tests {
         ))
         .expect_err("bad date must reject");
         assert!(err.to_string().contains("YYYY-MM-DD"), "{err}");
+    }
+
+    #[test]
+    fn prepare_resolves_the_tdx_collateral_date() {
+        let cfg =
+            modules_cfg(r#"[{"type":"tdx","value":{"collateral":{"min_tcb_date":"2026-06-01"}}}]"#);
+        let mut groups = parse_module_groups(&cfg).expect("parse");
+        let ModuleEntry::HardwareCheck(HardwareCheck::Tdx(tdx)) = &groups[0][0] else {
+            panic!("expected Tdx");
+        };
+        assert_eq!(tdx.min_tcb_date_epoch, None, "parse does not resolve dates");
+
+        prepare_module_groups(&mut groups).expect("prepare");
+        let ModuleEntry::HardwareCheck(HardwareCheck::Tdx(tdx)) = &groups[0][0] else {
+            panic!("expected Tdx");
+        };
+        // 2026-06-01 UTC midnight.
+        assert_eq!(tdx.min_tcb_date_epoch, Some(1780272000));
     }
 
     #[tokio::test]
