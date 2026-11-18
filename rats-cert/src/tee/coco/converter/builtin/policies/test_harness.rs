@@ -9,7 +9,7 @@ use super::super::policy_config::ModuleGroupsConfig;
 use super::super::test_fixtures::{jcs_compact, sha256_hex};
 use super::super::test_fixtures::{rekor_entry_value, transparency_entry};
 use super::super::transparency::{RekorBaseline, VerifiedRekorEntry};
-use super::modules::{parse_module_groups, render_modules_policy, Module};
+use super::modules::{parse_module_groups, render_modules_policy, ModuleEntry};
 use serde_json::{json, Value};
 
 // --- Policy rendering helpers ---------------------------------------------
@@ -29,10 +29,10 @@ pub(in crate::tee::coco::converter::builtin::policies) fn render_modules(
 
 /// Attach injected resolved data to the transparency entries of a parsed
 /// module tree, in flatten order.
-fn attach_resolved(groups: &mut [Vec<Module>], resolved: &[Option<RekorBaseline>]) {
+fn attach_resolved(groups: &mut [Vec<ModuleEntry>], resolved: &[Option<RekorBaseline>]) {
     let mut slots = resolved.iter();
     for module in groups.iter_mut().flatten() {
-        if let Module::TransparencyLog { resolved: slot, .. } = module {
+        if let ModuleEntry::TransparencyLog { resolved: slot, .. } = module {
             *slot = slots
                 .next()
                 .expect("resolved data for every transparency_log entry")
