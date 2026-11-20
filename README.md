@@ -1,276 +1,106 @@
+<div align="center">
+
 # TNG
 
-[![Build Docker](/../../actions/workflows/build-docker.yml/badge.svg)](/../../actions/workflows/build-docker.yml)
-[![Build RPM](/../../actions/workflows/build-rpm.yml/badge.svg)](/../../actions/workflows/build-rpm.yml)
-[![Build Python SDK](/../../actions/workflows/build-python-sdk.yml/badge.svg)](/../../actions/workflows/build-python-sdk.yml)
-[![Build WASM SDK](/../../actions/workflows/build-wasm-sdk.yml/badge.svg)](/../../actions/workflows/build-wasm-sdk.yml)
-[![CI](/../../actions/workflows/test.yml/badge.svg)](/../../actions/workflows/test.yml)
-[![codecov](https://codecov.io/gh/inclavare-containers/TNG/graph/badge.svg?token=7CUZW26SH6)](https://codecov.io/gh/inclavare-containers/TNG)
-[![npm](https://img.shields.io/npm/v/@inclavare-containers/tng?logo=npm&label=npm)](https://www.npmjs.com/package/@inclavare-containers/tng)
-[![PyPI](https://img.shields.io/pypi/v/tng-sdk?logo=pypi&label=pypi)](https://pypi.org/project/tng-sdk/)
-[![Go Reference](https://pkg.go.dev/badge/github.com/inclavare-containers/tng/tng-go.svg)](https://pkg.go.dev/github.com/inclavare-containers/tng/tng-go)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Rust](https://img.shields.io/badge/rustc-1.89.0+-blue?logo=rust)](https://www.rust-lang.org)
+**Trusted Network Gateway**
 
-[中文文档](README_zh.md)
+Attested, encrypted communication across trust domains.
 
-> **Trusted Network Gateway** — a transparent gateway that establishes **end-to-end encrypted tunnels with remote attestation** for confidential computing environments. Zero code changes required.
+[Quick start](#quick-start) · [Documentation](docs/README.md) · [Scenarios](docs/scenarios/README.md) · [SDKs](#integrate-your-way) · [Benchmarks](docs/performance.md)
 
-## Quick Start
+[![Release](https://img.shields.io/github/v/release/inclavare-containers/TNG?color=087f8c)](https://github.com/inclavare-containers/TNG/releases)
+[![CI](https://github.com/inclavare-containers/TNG/actions/workflows/test.yml/badge.svg)](https://github.com/inclavare-containers/TNG/actions/workflows/test.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-526175)](LICENSE)
 
-TNG offers multiple integration modes — pick the one that fits your scenario.
+English · [简体中文](README_zh.md)
 
-<details>
-<summary><b>Run with Docker</b> — fastest way to try TNG</summary>
+</div>
 
-```sh
-docker run -it --rm --privileged --network host --cgroupns=host \
-  ghcr.io/inclavare-containers/tng:latest \
-  tng launch --config-content='<your config json>'
-```
+TNG is a Swiss army knife for communication in confidential computing. Connect existing applications to services in trusted execution environments (TEEs), verify the peer against your attestation policy, and encrypt traffic between TNG endpoints. Choose transparent interception, a local proxy, or an SDK to fit your application.
 
-No installation needed. Just provide a JSON config and TNG handles the rest.
+![TNG connects applications across trust domains through attested encrypted tunnels, with load balancing, confidential service replicas, and separate TCP, HTTP and UDP paths.](docs/assets/tng-overview.svg)
 
-</details>
+*TNG protects the link between tunnel endpoints. Local application links and attestation roles depend on deployment. The browser SDK supplies client-side TNG functionality without a local daemon. [Figure notes and capability references](docs/assets/README.md).*
 
-<details>
-<summary><b>tng exec</b> — zero code changes for existing apps</summary>
+## Quick start
+
+Run an HTTP request through a local **RATS-TLS tunnel, non-multiplexed**, using the complete [example configuration](examples/quickstart/local.json). This demo disables remote attestation on both endpoints with `no_ra: true`: it demonstrates encrypted forwarding, without verifying a TEE or authenticating a trusted workload. Use it on your own machine only.
+
+Install a prebuilt `tng` binary from [Releases](https://github.com/inclavare-containers/TNG/releases) and put it on your `PATH`. You also need Git, Python 3 and curl. No root access, TEE or Docker is needed for this port-mapping example. Keep ports 38080, 38081 and 38082 free.
+
+Get the example:
 
 ```sh
-# Start your existing app through TNG transparently
-tng exec --config-file config.json -- ./your-app
+git clone https://github.com/inclavare-containers/TNG.git
+cd TNG
 ```
 
-Your app talks to the backend as usual — TNG intercepts at the network layer and encrypts via remote attestation tunnel.
-
-</details>
-
-<details>
-<summary><b>JavaScript SDK</b> — browser-side encrypted requests</summary>
+In terminal 1, start a loopback-only backend:
 
 ```sh
-npm install @inclavare-containers/tng
+cd examples/quickstart/backend
+python3 -m http.server 38080 --bind 127.0.0.1
 ```
 
-```js
-import { TngClient } from '@inclavare-containers/tng';
-
-const client = new TngClient({ config: { /* your config */ } });
-const response = await client.fetch('https://your-tee-service/api/data');
-```
-
-Runs entirely in the browser via WebAssembly. No server-side proxy needed.
-
-</details>
-
-<details>
-<summary><b>Python SDK</b> — programmatic integration</summary>
+In terminal 2, from the same repository directory, start both tunnel endpoints:
 
 ```sh
-pip install tng-sdk
+tng launch --config-file examples/quickstart/local.json
 ```
 
-```python
-from tng import TngClient
-
-client = TngClient(config={"ingress": {...}, "egress": {...}})
-response = client.request("https://your-tee-service/api/data")
-```
-
-Supports `httpx`, `requests`, and `openai` as optional backends.
-
-</details>
-
-<details>
-<summary><b>Go SDK</b> — programmatic integration for Go services</summary>
+In terminal 3, send a request through the tunnel:
 
 ```sh
-go get github.com/inclavare-containers/tng/tng-go
+curl --fail --noproxy '*' http://127.0.0.1:38082/hello.txt
+# Hello through TNG.
 ```
 
-```go
-import "github.com/inclavare-containers/tng/tng-go"
+Stop TNG and the backend with Ctrl+C in their terminals. [Follow the full tutorial](docs/getting-started.md) for the topology, troubleshooting and the next step: enabling real remote attestation.
 
-// Spawns a TNG subprocess with an http_proxy ingress automatically
-rt, err := tng.NewRoundTripper(&tng.Config{NoRA: true})
-if err != nil {
-    log.Fatal(err)
-}
-defer rt.Close()
+## From an application to a confidential service
 
-// Works with the standard http.Client
-client := &http.Client{Transport: rt}
-resp, err := client.Get("http://your-tee-service/api/data")
-```
+| Your task | TNG capability | Start here |
+| --- | --- | --- |
+| Connect an existing application | Port mapping, HTTP/SOCKS5 proxy, transparent interception, or `tng exec` | [Choose an integration](docs/README.md#choose-an-integration) |
+| Protect TCP or UDP traffic | RATS-TLS for TCP; QUIC datagram tunnels for UDP | [Configuration reference](docs/configuration.md) |
+| Keep HTTP routing infrastructure | OHTTP encrypts messages while retaining an outer HTTP envelope for L7 routing | [OHTTP cluster](docs/scenarios/03-business-cluster/README.md) |
+| Deploy replicated confidential services | Protocol-specific L4/L7 load balancing; shared and rotating OHTTP keys | [Load balancing](docs/using-with-slb.md) · [Key sharing](docs/peer_shared.md) |
+| Verify one or both peers | Unilateral, mutual or reverse attestation, with configurable verification policies | [Remote attestation](docs/remote_attestation.md) |
+| Protect AI inference requests | vLLM topologies, browser and OpenAI client integrations | [Inference scenarios](docs/scenarios/README.md) |
 
-Pure Go, no CGO required. Drop-in `http.RoundTripper` for any Go HTTP client.
+Select [RATS-TLS or OHTTP](docs/protocols.md) for your traffic and deployment. RATS-TLS has separate non-multiplexed and multiplexed configurations. UDP tunneling uses QUIC datagrams and requires the corresponding features in your binary. Transparent interception and `tng exec` have platform and permission requirements described in their guides.
 
-</details>
+## Integrate your way
 
-See [Installation](#installation) for Docker, RPM, binary, and SDK options.
+| Interface | Installation or entry point | Guide |
+| --- | --- | --- |
+| CLI / daemon | [Binary and RPM releases](https://github.com/inclavare-containers/TNG/releases) | [Getting started](docs/getting-started.md) |
+| Container | `ghcr.io/inclavare-containers/tng` | [Build and deployment](docs/developer.md#build-and-deployment) |
+| Existing process | `tng exec --config-file config.json -- ./your-app` | [Process interception](tng-hook/README.md) |
+| Browser / JavaScript | `npm install @inclavare-containers/tng` | [WASM SDK](tng-wasm/README.md) · [Live demo](https://inclavare-containers.github.io/TNG/) |
+| Python | `pip install tng-sdk` | [Python SDK](tng-python/README.md) |
+| Go | `go get github.com/inclavare-containers/tng/tng-go` | [Go SDK](tng-go/README.md) |
 
----
+The `tng exec` command above illustrates the interface; use the hook guide for its configuration. Python and Go integration requirements are described in their SDK guides. Browser integration runs through WebAssembly.
 
-## Table of Contents
+## Performance
 
-- [What is TNG?](#what-is-tng)
-- [How It Works](#how-it-works)
-- [Key Features](#key-features)
-- [Why TNG vs. Other Solutions?](#why-tng-vs-other-solutions)
-- [Installation](#installation)
-- [Project Structure](#project-structure)
-- [Documentation](#documentation)
-- [Contributing](#contributing)
-- [License](#license)
+The [performance snapshot](docs/performance.md) reports TCP throughput, HTTP keep-alive and HTTP without keep-alive, including CPU and memory measurements. It distinguishes RATS-TLS non-multiplexed, RATS-TLS multiplexed and OHTTP from the reference proxies.
 
----
+The recorded snapshot uses TNG 2.11.0 at revision `6460428f` on two 4-vCPU Alibaba Cloud ECS hosts, with remote attestation enabled. Results are single-run measurements with the strongest measured round selected per workload/concurrency cell. See the report for hardware, policies and complete results; use the [benchmark harness](bench/README.md) to measure your deployment.
 
-## What is TNG?
+## Documentation and contributing
 
-TNG (Trusted Network Gateway) is a transparent gateway tool that brings **remote attestation + encrypted tunnel** capability to confidential computing, based on the [IETF RFC 9334](https://datatracker.ietf.org/doc/rfc9334/) (RATS) standard.
+[Documentation home](docs/README.md) · [Scenario catalog](docs/scenarios/README.md) · [Configuration](docs/configuration.md) · [Compatibility](docs/version_compatibility.md) · [Changelog](CHANGELOG.md)
 
-It enables two parties to automatically verify each other's runtime environment — *"who you are and what code you're running"* — and establish an end-to-end encrypted channel, **without modifying any business code**.
+TNG integrates with the Confidential Containers [guest-components](https://github.com/confidential-containers/guest-components) and [Trustee](https://github.com/confidential-containers/trustee) ecosystem. The [architecture guide](docs/architecture.md) introduces tunnel endpoints and attestation roles; the [developer guide](docs/developer.md) covers builds and tests.
 
-```mermaid
-graph LR
-    subgraph ClientEnv [Client Environment]
-        App[Application]
-        TNG_In[TNG Ingress]
-    end
-
-    subgraph TrustedEnv ["TEE (TDX / SEV-SNP / CSV)"]
-        TNG_Eg[TNG Egress]
-        Service[Business Service]
-    end
-
-    App -- Plain Traffic --> TNG_In
-    TNG_In -. Remote Attestation + Encrypted Tunnel .-> TNG_Eg
-    TNG_Eg -- Decrypt & Forward --> Service
-
-    style TrustedEnv fill:#ffd700,stroke:#d4af37,stroke-width:2px
-    linkStyle 1 stroke:#d4af37,stroke-width:2px
-```
-
-## How It Works
-
-1. **Deploy** a pair of TNG instances — one as **Ingress** (tunnel entry, on the client side) and one as **Egress** (tunnel exit, on the server side in a TEE).
-
-   > **Naming note:** "Ingress" means traffic *entering the tunnel*, not "incoming to a server." Think of it as the tunnel's front door — the client-side endpoint where plaintext traffic gets encrypted and sent through the tunnel. Egress is the opposite end where traffic exits the tunnel and reaches the destination service.
-2. **Remote Attestation** — the Ingress verifies the Egress's TEE hardware, software hashes, and runtime configuration via the [Attestation Agent (AA)](docs/architecture.md#remote-attestation) and Attestation Service (AS).
-3. **Encrypted Tunnel** — once verified, an end-to-end encrypted tunnel is established (RA-TLS or OHTTP).
-4. **Transparent Forwarding** — plaintext traffic from the client application is automatically encrypted, forwarded through the tunnel, and decrypted at the server side — all at the network layer.
-
-The entire process is **driven by a single JSON config file**. No SDK integration, no code changes, no certificate management.
-
-## Key Features
-
-| | |
-|---|---|
-| 🔐 **Multiple Protocols** | RA-TLS for arbitrary TCP traffic, OHTTP for HTTP message-level encryption |
-| 🚫 **Zero Intrusiveness** | Transparent proxy via netfilter, HTTP proxy, or Socks5 — no business code changes |
-| 📦 **Flexible Deployment** | VM daemon, K8s Sidecar, browser SDK — one binary, many forms |
-| 🔀 **Bidirectional RA** | Unidirectional, bidirectional, or reverse-RA — configurable per your trust model |
-| 🦀 **Pure Rust** | Built-in RA-TLS implemented in Rust for memory safety |
-| 🧩 **CoCo Ecosystem** | Works with [`guest-components`](https://github.com/confidential-containers/guest-components) & [`trustee`](https://github.com/confidential-containers/trustee) |
-
-## Why TNG vs. Other Solutions?
-
-| Aspect | Traditional TLS (PKI) | RA-TLS Libraries | Service Mesh (SPIFFE) | **TNG** |
-|---|---|---|---|---|
-| **Trust Root** | CA-issued X.509 certs | TEE hardware evidence | CA-issued SPIFFE certs | **TEE hardware evidence** |
-| **Runtime Verification** | No | Manual integration required | No | **Built-in, fine-grained** |
-| **Code Changes** | App must handle TLS | App must link RA-TLS lib | Infrastructure-level | **None** |
-| **Cert Management** | Apply, distribute, rotate | Manual | Automated via mesh | **Not needed** |
-| **Deployment** | Per-app config | Per-app integration | Full mesh infra | **Single JSON config** |
-| **Protocol Support** | TLS only | TLS variant | TLS only | **RA-TLS + OHTTP** |
-
-## Installation
-
-### Option 1: Docker (Recommended)
+Contributions are welcome through [issues](https://github.com/inclavare-containers/TNG/issues) and [pull requests](https://github.com/inclavare-containers/TNG/pulls). Follow the developer guide before running the test suite; integration tests share network state and must run sequentially.
 
 ```sh
-docker run -it --rm --privileged --network host --cgroupns=host \
-  ghcr.io/inclavare-containers/tng:latest \
-  tng launch --config-content='<your config json>'
+make clippy
+cargo fmt --check
+cargo build
 ```
 
-### Option 2: RPM Package
-
-```sh
-sudo rpm -ivh tng-<version>.rpm
-sudo tng launch --config-file=/etc/tng/config.json
-```
-
-### Option 3: Binary
-
-Download the pre-built binary from [Releases](https://github.com/inclavare-containers/TNG/releases) and run directly.
-
-### Option 4: JavaScript SDK (Browser)
-
-```sh
-npm install @inclavare-containers/tng
-```
-
-Full SDK docs: [tng-wasm/README.md](tng-wasm/README.md)
-
-### Option 5: Python SDK
-
-```sh
-pip install tng-sdk
-```
-
-Full SDK docs: [tng-python/README.md](tng-python/README.md)
-
-### Option 6: Go SDK
-
-```sh
-go get github.com/inclavare-containers/tng/tng-go
-```
-
-Full SDK docs: [tng-go/README.md](tng-go/README.md)
-
-> [!TIP]
-> **New to TNG?** Start with [Core Concepts & Workflow](docs/architecture.md) to understand the Ingress/Egress model and remote attestation roles, then check the [Configuration Reference](docs/configuration.md) for all available fields.
-
-## Project Structure
-
-```
-tng/             Core gateway binary (CLI) — the main entry point
-rats-cert/       Certificate generation and management library
-tng-hook/        LD_PRELOAD hook library (libtng_hook.so) for `tng exec` transparent port interception
-tng-wasm/        WebAssembly module + JavaScript SDK for browsers
-tng-python/      Python SDK for programmatic integration
-tng-go/          Go SDK for programmatic integration
-tng-testsuite/   Integration and e2e test cases
-scripts/         Build, deploy, and CI helper scripts
-docs/            Architecture, configuration, scenarios, and developer guides
-```
-
-## Documentation
-
-| Document | Description |
-|---|---|
-| [Core Concepts & Workflow](docs/architecture.md) | Ingress/Egress model, RA roles (AA/AS), RATS-TLS & OHTTP protocols |
-| [Configuration Reference](docs/configuration.md) | Complete field-by-field reference with examples |
-| [Scenario Guides](docs/scenarios/) | Real-world deployment topologies with full configs |
-| [Developer Guide](docs/developer.md) | Build from source (Docker/RPM), run tests, integrate |
-| [Version Compatibility](docs/version_compatibility.md) | Breaking changes and migration notes between versions |
-| [JavaScript SDK](tng-wasm/README.md) | Browser-side SDK usage and examples |
-| [Python SDK](tng-python/README.md) | Python SDK usage and examples |
-| [Go SDK](tng-go/README.md) | Go SDK usage and examples |
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit an [Issue](https://github.com/inclavare-containers/TNG/issues) or [Pull Request](https://github.com/inclavare-containers/TNG/pulls).
-
-Before pushing, ensure:
-
-```bash
-make clippy && cargo fmt --check && cargo build
-```
-
-See [Developer Guide](docs/developer.md) for detailed build and test instructions.
-
-## License
-
-[Apache-2.0](LICENSE)
+Licensed under [Apache-2.0](LICENSE).
