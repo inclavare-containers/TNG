@@ -23,10 +23,11 @@ pub use transparency::TransparencyCaches;
 // that reachability for downstream users of the builtin converter.
 pub use policy_config::{
     ArtifactLogService, ArtifactServerService, GpuPostureConfig, ModuleEntryConfig,
-    ModuleGroupsConfig, NvidiaPostureConfig, PolicyConfig, ReferenceValueConfig, RekorV1Service,
-    SampleProvenancePayloadConfig, SlsaReferenceValuePayloadConfig, TcbMinStatus, TdxBit,
-    TdxCollateralConfig, TdxEventlog, TdxPostureConfig, TdxSeptVe, TdxTcbConfig,
-    TransparencyLogEntryConfig, TransparencyServiceConfig,
+    ModuleGroupsConfig, NotPrintableAscii, NvidiaPostureConfig, PolicyConfig, PrintableAscii,
+    ReferenceValueConfig, RekorV1Service, SampleProvenancePayloadConfig,
+    SlsaReferenceValuePayloadConfig, TcbMinStatus, TdxBit, TdxCollateralConfig, TdxEventlog,
+    TdxPostureConfig, TdxSeptVe, TdxTcbConfig, TransparencyLogEntryConfig,
+    TransparencyServiceConfig,
 };
 
 // The policy chooser list is only needed by the wasm SDK and tests.

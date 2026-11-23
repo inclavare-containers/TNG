@@ -97,6 +97,22 @@
 
 `transparency_log` 条目的维度由其 `publishedMeasurements` 中各类型决定；`fallbackPublishedMeasurements` 是其子集，不增加维度。条目失败只影响它门控的维度。
 
+## 评定未通过时的诊断
+
+modules 评定结果为非 affirming 时，校验端会报出每一个未通过的检查。每一行写明所属的 AR4SI 维度与检查名，并在有值时带上期望值与实测值，以及失败原因。姿态条目按条件逐项报告（例如 `tdx.debug`、`tdx.eventlog`、`nvidia.cc_enabled`、`gpu.result_codes`），因此报出的是失败的具体条件，而不是整个条目。所属维度仍为 affirming 的检查不会列出：当另一条基线通过时，失败的基线不会被报成失败。
+
+```text
+failed checks:
+- [executables] com.alibabacloud.container.image.model-server, expected ["sha256:c5945b51…"], actual ["sha256:95a7e6f2…"], reason mismatch
+- [hardware] tdx.debug, expected "debug bit clear", actual "0100001000000000", reason mismatch
+```
+
+评定未通过时，诊断信息会把固定的期望值（`expected`）发送给校验端，因此不要在允许列表中固定机密信息。
+
+`transparency_log` 行在日志记录的清单与证据不符时报 `transparency-log-mismatch`，artifact server 明确吊销该度量时报 `transparency-log-revoked`，artifact server 的其他失败报 `transparency-log-failed`。以 artifact server 为主服务时，该行还会带 `detail`，内容是服务端返回的消息；配置了 rekor 回退且回退也失败时，`detail` 同时包含回退的消息。
+
+`modules` 以外的内置模板只报告状态与信任度向量。
+
 ## 配置错误
 
 以下情况在策略加载期即被拒绝，不会进入运行期：

@@ -51,6 +51,18 @@ fn manifest_rules(types: &[String], schema_expr: &str, name: &str) -> String {
     rules
 }
 
+/// The Rego rules for one `transparency_log` entry plus the names of the
+/// diagnostic rules the modules assembler must reference.
+#[derive(Debug)]
+pub(super) struct TransparencyEntryRules {
+    pub rules: String,
+    /// The rule holding the reason reported on the failing diagnostic row.
+    pub failure_reason_rule: String,
+    /// The rule holding the human-readable detail. Only an artifact-server
+    /// primary has a server message to report.
+    pub failure_detail_rule: Option<String>,
+}
+
 /// Render the Rego rules for one `transparency_log` module entry.
 ///
 /// `pred` is the entry predicate the modules builder ANDs into its group, and
@@ -63,7 +75,7 @@ pub(super) fn build_entry_rules(
     resolved: Option<&RekorBaseline>,
     pred: &str,
     prefix: &str,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<TransparencyEntryRules> {
     let primary = cfg
         .services
         .first()
@@ -71,6 +83,7 @@ pub(super) fn build_entry_rules(
     let mut sorted_pm = cfg.published_measurements.clone();
     sorted_pm.sort();
     let schema_expr = format!("{prefix}_schema_version");
+    let failure_reason_rule = format!("{prefix}_failure_reason");
 
     match primary {
         TransparencyServiceConfig::RekorV1(_) => {
@@ -82,8 +95,9 @@ pub(super) fn build_entry_rules(
                 &schema_expr,
                 &format!("{prefix}_reconstructed_manifest"),
             );
-            Ok(format!(
-                r#"# transparency_log entry: rekor-v1 primary, payloadHash + DSSE baked at load
+            Ok(TransparencyEntryRules {
+                rules: format!(
+                    r#"# transparency_log entry: rekor-v1 primary, payloadHash + DSSE baked at load
 {prefix}_payload_hash := {payload_hash:?}
 {prefix}_schema_version := {schema_version:?}
 # baked: DSSE publisher signature + trusted publisher public key
@@ -102,15 +116,23 @@ pub(super) fn build_entry_rules(
     tng.verify_dsse_signature([json.marshal({prefix}_reconstructed_manifest), {prefix}_dsse_signature, {prefix}_publisher_key]) == true
 }}
 
+# A rekor-v1 primary has no server to ask, so a mismatch is all the failing
+# diagnostic row can report.
+{failure_reason_rule} := "transparency-log-mismatch"
+
 "#,
-                prefix = prefix,
-                payload_hash = resolved.entry.payload_hash,
-                schema_version = cfg.schema_version,
-                manifest = manifest,
-                dsse_signature = resolved.entry.dsse_signature,
-                publisher_key = resolved.publisher_key,
-                pred = pred,
-            ))
+                    prefix = prefix,
+                    payload_hash = resolved.entry.payload_hash,
+                    schema_version = cfg.schema_version,
+                    manifest = manifest,
+                    dsse_signature = resolved.entry.dsse_signature,
+                    publisher_key = resolved.publisher_key,
+                    pred = pred,
+                    failure_reason_rule = failure_reason_rule,
+                ),
+                failure_reason_rule,
+                failure_detail_rule: None,
+            })
         }
         TransparencyServiceConfig::ArtifactServer(service) => {
             let ArtifactServerService {
@@ -170,21 +192,74 @@ pub(super) fn build_entry_rules(
                                  {prefix}_fallback_publisher_key := {fallback_publisher_key}\n"
                         ),
                         format!(
-                            r#"
-{fallback_manifest}
+                            r#"{fallback_manifest}
 {pred} if {{
     {prefix}_primary_status == "fail"
-    tng.fetch_rekor_on_demand([{prefix}_fallback_log_url, {prefix}_fallback_log_index, json.marshal({prefix}_fallback_manifest), {prefix}_fallback_publisher_key]) == true
+    {prefix}_fallback_manifest
+    object.get({prefix}_fallback, "ok", false) == true
+}}
+
+# The fallback call stays guarded so a successful primary never fetches.
+{prefix}_fallback := result if {{
+    {prefix}_primary_status == "fail"
+    {prefix}_fallback_manifest
+    result := tng.fetch_rekor_on_demand([{prefix}_fallback_log_url, {prefix}_fallback_log_index, json.marshal({prefix}_fallback_manifest), {prefix}_fallback_publisher_key])
+}}
+
+{prefix}_fallback_error := "the appraisal input carries no measurement for the fallback published types" if {{
+    {prefix}_primary_status == "fail"
+    not {prefix}_fallback_manifest
+}}
+
+{prefix}_fallback_error := object.get({prefix}_fallback, "error", "") if {{
+    {prefix}_primary_status == "fail"
+    {prefix}_fallback_manifest
+}}
+
+{prefix}_failure_detail := "the appraisal input carries no measurement for the published types" if {{
+    not {prefix}_full_manifest
+    not {prefix}_fallback_manifest
+}}
+
+# The primary never called the server here, but a fallback that did run can
+# still have failed for its own reason.
+{prefix}_failure_detail := sprintf("the appraisal input carries no measurement for the published types; rekor fallback: %s", [{prefix}_fallback_error]) if {{
+    not {prefix}_full_manifest
+    {prefix}_fallback_manifest
+}}
+
+{prefix}_failure_detail := sprintf("artifact server: %s", [object.get({prefix}_primary, "error", "")]) if {{
+    {prefix}_full_manifest
+    {prefix}_primary_status == "deny"
+}}
+
+{prefix}_failure_detail := sprintf("artifact server: %s; rekor fallback: %s", [object.get({prefix}_primary, "error", ""), {prefix}_fallback_error]) if {{
+    {prefix}_full_manifest
+    {prefix}_primary_status == "fail"
 }}
 "#
                         ),
                     )
                 }
-                _ => (String::new(), String::new()),
+                _ => (
+                    String::new(),
+                    format!(
+                        r#"{prefix}_failure_detail := "the appraisal input carries no measurement for the published types" if {{
+    not {prefix}_full_manifest
+}}
+
+{prefix}_failure_detail := sprintf("artifact server: %s", [object.get({prefix}_primary, "error", "")]) if {{
+    {prefix}_full_manifest
+    {prefix}_primary_status != "ok"
+}}
+"#
+                    ),
+                ),
             };
 
-            Ok(format!(
-                r#"# transparency_log entry: artifact-server primary, resolved at appraisal
+            Ok(TransparencyEntryRules {
+                rules: format!(
+                    r#"# transparency_log entry: artifact-server primary, resolved at appraisal
 {prefix}_schema_version := {schema_version:?}
 {prefix}_artifact_server_url := {url_lit}
 {prefix}_log_services := {ls_lit}
@@ -200,22 +275,42 @@ pub(super) fn build_entry_rules(
     not {prefix}_full_manifest
 }}
 
-{prefix}_primary_status := tng.resolve_artifact_server([{prefix}_artifact_server_url, json.marshal({prefix}_full_manifest), json.marshal({prefix}_log_services), {prefix}_publisher_key]) if {{
+# The host call stays in the rule body: an undefined manifest must never reach
+# the artifact server.
+{prefix}_primary := result if {{
+    {prefix}_full_manifest
+    result := tng.resolve_artifact_server([{prefix}_artifact_server_url, json.marshal({prefix}_full_manifest), json.marshal({prefix}_log_services), {prefix}_publisher_key])
+}}
+
+{prefix}_primary_status := object.get({prefix}_primary, "status", "fail") if {{
     {prefix}_full_manifest
 }}
 
 {pred} if {{ {prefix}_primary_status == "ok" }}
+
+{failure_reason_rule} := "transparency-log-revoked" if {{
+    {prefix}_primary_status == "deny"
+}}
+
+{failure_reason_rule} := "transparency-log-failed" if {{
+    {prefix}_primary_status == "fail"
+}}
+
 {fallback_rules}"#,
-                prefix = prefix,
-                schema_version = cfg.schema_version,
-                url_lit = url_lit,
-                ls_lit = ls_lit,
-                publisher_key_lit = publisher_key_lit,
-                fallback_lit = fallback_lit,
-                fallback_rules = fallback_rules,
-                manifest = manifest,
-                pred = pred,
-            ))
+                    prefix = prefix,
+                    schema_version = cfg.schema_version,
+                    url_lit = url_lit,
+                    ls_lit = ls_lit,
+                    publisher_key_lit = publisher_key_lit,
+                    fallback_lit = fallback_lit,
+                    fallback_rules = fallback_rules,
+                    manifest = manifest,
+                    pred = pred,
+                    failure_reason_rule = failure_reason_rule,
+                ),
+                failure_reason_rule,
+                failure_detail_rule: Some(format!("{prefix}_failure_detail")),
+            })
         }
     }
 }
@@ -223,8 +318,8 @@ pub(super) fn build_entry_rules(
 #[cfg(test)]
 mod tests {
     use super::super::super::super::test_fixtures::{
-        self, aael_event, hex64, hex96, jcs_compact, manifest, rekor_entry_value, tdx_input,
-        tdx_quote_input, transparency_entry,
+        self, aael_event, artifact_entry_value, hex64, hex96, jcs_compact, manifest,
+        rekor_entry_value, tdx_input, tdx_quote_input, transparency_entry,
     };
     #[cfg(feature = "crypto-rustcrypto")]
     use super::super::super::test_harness::resolved_from_manifest;
@@ -295,6 +390,72 @@ mod tests {
         assert!(!policy.contains("actual_measurement(type) :="), "{policy}");
         assert!(!policy.contains("query_reference_value"));
         assert!(!policy.contains("td_payload_blob_length"), "{policy}");
+
+        // A rekor-v1 primary reports a plain mismatch and no detail: there is
+        // no server to ask.
+        assert!(
+            policy.contains("t_0_0_failure_reason := \"transparency-log-mismatch\""),
+            "{policy}"
+        );
+        assert!(!policy.contains("failure_detail"), "{policy}");
+    }
+
+    /// The artifact-server host functions return objects, and the diagnostics
+    /// read their reason and detail from dedicated rules. Semantics are covered
+    /// by the equivalence corpus; the pinned text keeps the interface contract.
+    #[test]
+    fn transparency_log_artifact_rego_shape_contract() {
+        let with_fallback = render(
+            json!([transparency_entry(artifact_entry_value(
+                "https://attest.example.com",
+                "https://rekor.sigstore.dev",
+                Some(("https://fallback.example.com", 7)),
+            ))]),
+            &[None],
+        );
+        for rule in [
+            "t_0_0_primary := result if {",
+            "result := tng.resolve_artifact_server([t_0_0_artifact_server_url, json.marshal(t_0_0_full_manifest), json.marshal(t_0_0_log_services), t_0_0_publisher_key])",
+            "t_0_0_primary_status := object.get(t_0_0_primary, \"status\", \"fail\") if {",
+            "m_0_0 if { t_0_0_primary_status == \"ok\" }",
+            "t_0_0_failure_reason := \"transparency-log-revoked\" if {",
+            "t_0_0_failure_reason := \"transparency-log-failed\" if {",
+            "t_0_0_fallback := result if {",
+            "result := tng.fetch_rekor_on_demand([t_0_0_fallback_log_url",
+            "t_0_0_primary_status == \"fail\"\n    t_0_0_fallback_manifest\n    object.get(t_0_0_fallback, \"ok\", false) == true",
+            "t_0_0_failure_detail := \"the appraisal input carries no measurement for the published types\" if {",
+            "sprintf(\"the appraisal input carries no measurement for the published types; rekor fallback: %s\", [t_0_0_fallback_error])",
+            "sprintf(\"artifact server: %s\", [object.get(t_0_0_primary, \"error\", \"\")])",
+            "sprintf(\"artifact server: %s; rekor fallback: %s\", [object.get(t_0_0_primary, \"error\", \"\"), t_0_0_fallback_error])",
+            "\"reason\": t_0_0_failure_reason,\n\t\"detail\": t_0_0_failure_detail\n}",
+        ] {
+            assert!(
+                with_fallback.contains(rule),
+                "missing {rule:?} in:\n{with_fallback}"
+            );
+        }
+
+        // Without a fallback there is no fetch, and the detail names only the
+        // artifact server.
+        let no_fallback = render(
+            json!([transparency_entry(artifact_entry_value(
+                "https://attest.example.com",
+                "https://rekor.sigstore.dev",
+                None,
+            ))]),
+            &[None],
+        );
+        assert!(
+            !no_fallback.contains("tng.fetch_rekor_on_demand"),
+            "{no_fallback}"
+        );
+        assert!(
+            no_fallback.contains(
+                "sprintf(\"artifact server: %s\", [object.get(t_0_0_primary, \"error\", \"\")]) if {\n    t_0_0_full_manifest\n    t_0_0_primary_status != \"ok\"\n}"
+            ),
+            "{no_fallback}"
+        );
+        assert!(!no_fallback.contains("rekor fallback:"), "{no_fallback}");
     }
 
     #[cfg(feature = "crypto-rustcrypto")]

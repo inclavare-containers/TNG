@@ -97,6 +97,22 @@ A dimension with no entries stays affirming (2). `configuration` has no module t
 
 A `transparency_log` entry's dimensions come from the types in its `publishedMeasurements`; `fallbackPublishedMeasurements` is a subset and adds no dimension. An entry that fails affects only the dimensions it gates.
 
+## Diagnostics on a failed appraisal
+
+When a `modules` appraisal is not affirming, the verifying side reports every check that failed. Each line names the AR4SI dimension and the check, and carries the expected and observed values when they are available, plus a reason. Posture entries report one check per condition (for example `tdx.debug`, `tdx.eventlog`, `nvidia.cc_enabled`, `gpu.result_codes`), so the report points at the condition that failed rather than at the entry as a whole. A check whose dimension still affirms is not listed, so a baseline that lost its OR group is not reported as a failure when another baseline passed.
+
+```text
+failed checks:
+- [executables] com.alibabacloud.container.image.model-server, expected ["sha256:c5945b51…"], actual ["sha256:95a7e6f2…"], reason mismatch
+- [hardware] tdx.debug, expected "debug bit clear", actual "0100001000000000", reason mismatch
+```
+
+A non-affirming appraisal discloses the pinned `expected` values to the verifying side, so do not pin secrets in allow lists.
+
+A `transparency_log` row reports `transparency-log-mismatch` when the logged manifest does not match, `transparency-log-revoked` when the artifact server explicitly revoked the measurement, and `transparency-log-failed` for any other artifact-server failure. For an artifact-server primary the row also carries a `detail` with the server's message, plus the rekor fallback's message when a fallback is configured and fails as well.
+
+The other bundled templates report only the status and the trustworthiness vector.
+
 ## Configuration errors
 
 These are rejected when the policy loads, before any appraisal runs:

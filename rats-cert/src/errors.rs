@@ -1,6 +1,8 @@
 use thiserror::Error;
 
 use crate::tee::coco::converter::{grpc::GrpcAsVersion, restful::RestfulAsApiVersion};
+#[cfg(feature = "verifier-coco")]
+use crate::tee::coco::diagnostics::AppraisalDiagnostics;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -30,6 +32,15 @@ pub enum Error {
         status: String,
         tee_type: String,
         trustworthiness: String,
+    },
+
+    #[cfg(feature = "verifier-coco")]
+    #[error("EAR status is not affirming: got {status} for {tee_type}, trustworthiness: {trustworthiness}\nfailed checks:\n{diagnostics}")]
+    EarStatusNotAffirmingWithDiagnostics {
+        status: String,
+        tee_type: String,
+        trustworthiness: String,
+        diagnostics: AppraisalDiagnostics,
     },
 
     #[error("Multiple policy IDs found in EAR token")]

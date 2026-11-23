@@ -125,6 +125,97 @@ pub(crate) fn sign_dsse_for_manifest(manifest: &Value) -> (String, String) {
 /// Evaluate a Rego policy against `input` and return the four AR4SI
 /// trust-vector values as (executables, hardware, configuration, file_system).
 pub(crate) async fn eval_policy_vector(policy: &str, input: &str) -> (i8, i8, i8, i8) {
+    // The four rules our templates define. The real AS also queries four more
+    // AR4SI claims (instance-identity, runtime-opaque, ...); those are simply
+    // skipped when a policy leaves them undefined, so they need not be queried.
+    let rules = vec![
+        "executables".to_string(),
+        "hardware".to_string(),
+        "configuration".to_string(),
+        "file_system".to_string(),
+    ];
+    let result = evaluate_rules(policy, input, rules).await;
+    let get = |name: &str| -> i8 {
+        result
+            .get(name)
+            .and_then(|v| v.as_i64())
+            .and_then(|n| i8::try_from(n).ok())
+            .unwrap_or_else(|| panic!("policy did not produce a value for {name}"))
+    };
+    (
+        get("executables"),
+        get("hardware"),
+        get("configuration"),
+        get("file_system"),
+    )
+}
+
+/// Evaluate the four AR4SI trust-vector values and `data.policy.extensions` in
+/// ONE engine run. A transparency policy calls host functions from its rules;
+/// querying the vector and the extensions separately would run them twice (and
+/// hit the mock servers twice), so the contract tests use this.
+pub(in crate::tee::coco::converter::builtin::policies) async fn eval_policy(
+    policy: &str,
+    input: &str,
+) -> ((i8, i8, i8, i8), Option<Value>) {
+    let mut result = evaluate_rules(
+        policy,
+        input,
+        vec![
+            "executables".to_string(),
+            "hardware".to_string(),
+            "configuration".to_string(),
+            "file_system".to_string(),
+            "extensions".to_string(),
+        ],
+    )
+    .await;
+    let get = |name: &str| -> i8 {
+        result
+            .get(name)
+            .and_then(|v| v.as_i64())
+            .and_then(|n| i8::try_from(n).ok())
+            .unwrap_or_else(|| panic!("policy did not produce a value for {name}"))
+    };
+    let vector = (
+        get("executables"),
+        get("hardware"),
+        get("configuration"),
+        get("file_system"),
+    );
+    // An undefined complete rule reaches the rule map as regorus's undefined
+    // sentinel rather than being omitted.
+    let extensions = result
+        .remove("extensions")
+        .filter(|value| *value != Value::String("<undefined>".to_string()));
+    (vector, extensions)
+}
+
+/// Evaluate `data.policy.extensions` for `policy` over `input`. Returns `None`
+/// when the policy defines no `extensions` rule or the rule is undefined,
+/// which is how a successful appraisal leaves the token unchanged.
+pub(in crate::tee::coco::converter::builtin::policies) async fn eval_policy_extensions(
+    policy: &str,
+    input: &str,
+) -> Option<Value> {
+    let value = evaluate_rules(policy, input, vec!["extensions".to_string()])
+        .await
+        .remove("extensions")?;
+    // An undefined complete rule reaches the rule map as regorus's undefined
+    // sentinel rather than being omitted.
+    if value == Value::String("<undefined>".to_string()) {
+        return None;
+    }
+    Some(value)
+}
+
+/// Evaluate the named `data.policy.*` rules over `input` and return their
+/// values.
+async fn evaluate_rules(
+    policy: &str,
+    input: &str,
+    rules: Vec<String>,
+) -> std::collections::HashMap<String, Value> {
     use attestation_service::policy_engine::PolicyEngine as _;
     use std::sync::Arc;
 
@@ -157,15 +248,6 @@ pub(crate) async fn eval_policy_vector(policy: &str, input: &str) -> (i8, i8, i8
     .with_extra_extension_functions(super::super::host_fns::builtin_as_host_await_functions(
         Arc::new(super::super::transparency::TransparencyCaches::new()),
     ));
-    // The four rules our templates define. The real AS also queries four more
-    // AR4SI claims (instance-identity, runtime-opaque, ...); those are simply
-    // skipped when a policy leaves them undefined, so they need not be queried.
-    let rules = vec![
-        "executables".to_string(),
-        "hardware".to_string(),
-        "configuration".to_string(),
-        "file_system".to_string(),
-    ];
     // The upstream `PolicyEngine::evaluate` resolves Rego
     // `query_reference_value(...)` calls through a `ReferenceValueResolver`.
     // None of these templates query reference values, so an empty in-memory
@@ -173,24 +255,11 @@ pub(crate) async fn eval_policy_vector(policy: &str, input: &str) -> (i8, i8, i8
     let resolver = Arc::new(attestation_service::rvps::ReferenceValueResolver::new(
         Arc::new(rvps) as Arc<dyn attestation_service::rvps::RvpsApi>,
     ));
-    let result = engine
+    engine
         .evaluate(input, super::super::DEFAULT_POLICY_ID, rules, resolver)
         .await
-        .expect("evaluate policy");
-    let get = |name: &str| -> i8 {
-        result
-            .rules_result
-            .get(name)
-            .and_then(|v| v.as_i64())
-            .and_then(|n| i8::try_from(n).ok())
-            .unwrap_or_else(|| panic!("policy did not produce a value for {name}"))
-    };
-    (
-        get("executables"),
-        get("hardware"),
-        get("configuration"),
-        get("file_system"),
-    )
+        .expect("evaluate policy")
+        .rules_result
 }
 
 /// Call an `ExtensionFunction` closure the same way the regorus VM does: the

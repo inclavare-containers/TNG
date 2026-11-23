@@ -4,6 +4,7 @@ pub mod asr_attester;
 pub mod attester;
 #[cfg(feature = "verifier-coco")]
 pub mod converter;
+pub mod diagnostics;
 #[cfg(any(feature = "attester-coco", feature = "verifier-coco"))]
 pub mod evidence;
 #[cfg(feature = "verifier-coco")]
