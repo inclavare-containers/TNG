@@ -14,6 +14,7 @@
 use serde_json::Value;
 use std::collections::HashSet;
 
+use super::super::diagnostics::{AppraisalDiagnostics, APPRAISAL_DIAGNOSTICS_EXTENSION};
 use crate::errors::{Error, Result};
 
 /// Which EAR claim layout a submod uses.
@@ -171,11 +172,12 @@ pub(super) fn appraisal_policy_ids(claims: &Value) -> Result<HashSet<String>> {
                 })?;
 
         if status != "affirming" {
-            return Err(Error::EarStatusNotAffirming {
-                status: status.to_string(),
-                tee_type: key.to_string(),
-                trustworthiness: trustworthiness_vector.to_string(),
-            });
+            return Err(ear_status_not_affirming(
+                key,
+                submod,
+                status,
+                &trustworthiness_vector.to_string(),
+            ));
         }
 
         policy_ids.extend(ids.into_iter().map(str::to_owned));
@@ -190,6 +192,57 @@ pub(super) fn appraisal_policy_ids(claims: &Value) -> Result<HashSet<String>> {
         return Err(Error::NoValidPolicyId);
     }
     Ok(policy_ids)
+}
+
+/// Reads the optional `tng.appraisal-diagnostics` extension off one submod.
+/// Policies currently emit it as a JSON string because the pinned `ear` crate
+/// serializes map-valued extensions as key/value pair arrays; accepting the
+/// object form too keeps this working across an `ear` upgrade. The extension is
+/// a plain submod key, so it is read the same way for both claim layouts.
+fn parse_appraisal_diagnostics(submod_key: &str, submod: &Value) -> Option<AppraisalDiagnostics> {
+    let extension = submod.get(APPRAISAL_DIAGNOSTICS_EXTENSION)?;
+    let parsed: std::result::Result<AppraisalDiagnostics, serde_json::Error> = match extension {
+        Value::String(payload) => serde_json::from_str(payload),
+        extension => serde_json::from_value(extension.clone()),
+    };
+    match parsed {
+        // An empty list carries no information; fall back to the plain error
+        // instead of rendering "(no failed checks reported)".
+        Ok(diagnostics) if !diagnostics.failed.is_empty() => Some(diagnostics),
+        Ok(_) => None,
+        Err(error) => {
+            tracing::debug!(
+                submod = submod_key,
+                extension = APPRAISAL_DIAGNOSTICS_EXTENSION,
+                error = ?error,
+                "ignoring malformed appraisal diagnostics; falling back to the plain error"
+            );
+            None
+        }
+    }
+}
+
+/// Picks the non-affirming error variant, attaching the structured diagnostics
+/// when the policy reported them through the extension.
+fn ear_status_not_affirming(
+    tee_type: &str,
+    submod: &Value,
+    status: &str,
+    trustworthiness: &str,
+) -> Error {
+    match parse_appraisal_diagnostics(tee_type, submod) {
+        Some(diagnostics) => Error::EarStatusNotAffirmingWithDiagnostics {
+            status: status.to_string(),
+            tee_type: tee_type.to_string(),
+            trustworthiness: trustworthiness.to_string(),
+            diagnostics,
+        },
+        None => Error::EarStatusNotAffirming {
+            status: status.to_string(),
+            tee_type: tee_type.to_string(),
+            trustworthiness: trustworthiness.to_string(),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -246,6 +299,126 @@ mod tests {
 
     fn claims(submod: Value) -> Value {
         json!({"submods": {"cpu0": submod}})
+    }
+
+    fn diagnostics_payload() -> &'static str {
+        "{\"failed\":[{\"dimension\":\"executables\",\"check\":\"com.alibabacloud.container.image.vllm\",\"expected\":\"sha256:85a7\",\"actual\":[\"sha256:95a7\"],\"reason\":\"mismatch\"}]}"
+    }
+
+    fn legacy_submod_with_diagnostics() -> Value {
+        let mut submod = legacy_submod("contraindicated", "policy");
+        submod[APPRAISAL_DIAGNOSTICS_EXTENSION] = json!(diagnostics_payload());
+        submod
+    }
+
+    fn not_affirming_error(submod: &Value) -> Error {
+        let (status, trustworthiness) = if submod.get("ear_status").is_some() {
+            (&submod["ear_status"], &submod["ear_trustworthiness_vector"])
+        } else {
+            (&submod["ear.status"], &submod["ear.trustworthiness-vector"])
+        };
+        let status = status.as_str().unwrap();
+        let trustworthiness = trustworthiness.to_string();
+        ear_status_not_affirming("cpu0", submod, status, &trustworthiness)
+    }
+
+    #[test]
+    fn extension_yields_structured_diagnostics_error() {
+        let error = not_affirming_error(&legacy_submod_with_diagnostics());
+        match &error {
+            Error::EarStatusNotAffirmingWithDiagnostics {
+                status,
+                tee_type,
+                diagnostics,
+                ..
+            } => {
+                assert_eq!(status, "contraindicated");
+                assert_eq!(tee_type, "cpu0");
+                assert_eq!(diagnostics.failed.len(), 1);
+                assert_eq!(diagnostics.failed[0].dimension, "executables");
+                assert_eq!(
+                    diagnostics.failed[0].check,
+                    "com.alibabacloud.container.image.vllm"
+                );
+            }
+            other => panic!("expected structured diagnostics error, got {other:?}"),
+        }
+
+        let rendered = error.to_string();
+        assert!(rendered.contains("failed checks:"), "{rendered}");
+        assert!(
+            rendered.contains("com.alibabacloud.container.image.vllm"),
+            "{rendered}"
+        );
+        assert!(rendered.contains(r#"expected "sha256:85a7""#), "{rendered}");
+        assert!(rendered.contains(r#"actual ["sha256:95a7"]"#), "{rendered}");
+        assert!(rendered.contains("reason mismatch"), "{rendered}");
+    }
+
+    #[test]
+    fn diagnostics_extension_is_layout_independent() {
+        let mut submod = draft04_submod("contraindicated", &["default"]);
+        submod[APPRAISAL_DIAGNOSTICS_EXTENSION] = json!(diagnostics_payload());
+
+        match not_affirming_error(&submod) {
+            Error::EarStatusNotAffirmingWithDiagnostics { diagnostics, .. } => {
+                assert_eq!(diagnostics.failed[0].dimension, "executables");
+            }
+            other => panic!("expected structured diagnostics error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_extension_keeps_the_plain_error() {
+        let error = not_affirming_error(&legacy_submod("contraindicated", "policy"));
+        assert!(
+            matches!(error, Error::EarStatusNotAffirming { .. }),
+            "{error:?}"
+        );
+        assert!(!error.to_string().contains("failed checks:"), "{error}");
+    }
+
+    #[test]
+    fn extension_may_be_a_json_object() {
+        let mut submod = legacy_submod("contraindicated", "policy");
+        submod[APPRAISAL_DIAGNOSTICS_EXTENSION] = json!({
+            "failed": [{"dimension": "hardware", "check": "tdx"}]
+        });
+
+        match not_affirming_error(&submod) {
+            Error::EarStatusNotAffirmingWithDiagnostics { diagnostics, .. } => {
+                assert_eq!(diagnostics.failed[0].check, "tdx");
+            }
+            other => panic!("expected structured diagnostics error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_failed_list_keeps_the_plain_error() {
+        let mut submod = legacy_submod("contraindicated", "policy");
+        submod[APPRAISAL_DIAGNOSTICS_EXTENSION] = json!("{}");
+
+        let error = not_affirming_error(&submod);
+        assert!(
+            matches!(error, Error::EarStatusNotAffirming { .. }),
+            "{error:?}"
+        );
+        assert!(
+            !error.to_string().contains("no failed checks reported"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn unparseable_extension_falls_back_to_the_plain_error() {
+        let mut submod = legacy_submod("contraindicated", "policy");
+        submod[APPRAISAL_DIAGNOSTICS_EXTENSION] = json!("not a diagnostics payload");
+
+        let error = not_affirming_error(&submod);
+        assert!(
+            matches!(error, Error::EarStatusNotAffirming { .. }),
+            "{error:?}"
+        );
     }
 
     #[test]

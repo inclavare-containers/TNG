@@ -569,7 +569,7 @@ checksum = "21e4227379beff4205943696e6c3e0cd809bacdf3f0edd6e3dd153e2269571a4"
 [[package]]
 name = "attestation-service"
 version = "0.1.0"
-source = "git+https://github.com/openanolis/trustee/?rev=0215708b020f6e668c37ffedb510603f38b87dfb#0215708b020f6e668c37ffedb510603f38b87dfb"
+source = "git+https://github.com/openanolis/trustee/?rev=3c138563ae76e2a074e7611a68f1715653233f47#3c138563ae76e2a074e7611a68f1715653233f47"
 dependencies = [
  "aes-gcm",
  "aes-kw",
@@ -1694,7 +1694,7 @@ dependencies = [
  "bitfield 0.13.2",
  "bitflags 1.3.2",
  "codicon",
- "dirs 5.0.1",
+ "dirs",
  "hex",
  "hyper 0.14.32",
  "hyper-tls 0.5.0",
@@ -2163,16 +2163,7 @@ version = "5.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "44c45a9d03d6676652bcb5e724c7e988de1acad23a711b5217ab9cbecbec2225"
 dependencies = [
- "dirs-sys 0.4.1",
-]
-
-[[package]]
-name = "dirs"
-version = "6.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3e8aa94d75141228480295a7d0e7feb620b1a5ad9f12bc40be62411e38cce4e"
-dependencies = [
- "dirs-sys 0.5.0",
+ "dirs-sys",
 ]
 
 [[package]]
@@ -2193,20 +2184,8 @@ checksum = "520f05a5cbd335fae5a99ff7a6ab8627577660ee5cfd6a94a6a929b52ff0321c"
 dependencies = [
  "libc",
  "option-ext",
- "redox_users 0.4.6",
+ "redox_users",
  "windows-sys 0.48.0",
-]
-
-[[package]]
-name = "dirs-sys"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e01a3366d27ee9890022452ee61b2b63a67e6f13f58900b651ff5665f0bb1fab"
-dependencies = [
- "libc",
- "option-ext",
- "redox_users 0.5.3",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2216,7 +2195,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ebda144c4fe02d1f7ea1a7d9641b6fc6b580adcfa024ae48797ecdeb6825b4d"
 dependencies = [
  "libc",
- "redox_users 0.4.6",
+ "redox_users",
  "winapi",
 ]
 
@@ -2465,7 +2444,7 @@ dependencies = [
 [[package]]
 name = "eventlog"
 version = "0.1.0"
-source = "git+https://github.com/openanolis/trustee/?rev=0215708b020f6e668c37ffedb510603f38b87dfb#0215708b020f6e668c37ffedb510603f38b87dfb"
+source = "git+https://github.com/openanolis/trustee/?rev=3c138563ae76e2a074e7611a68f1715653233f47#3c138563ae76e2a074e7611a68f1715653233f47"
 dependencies = [
  "anyhow",
  "base64 0.21.7",
@@ -4236,7 +4215,7 @@ dependencies = [
 [[package]]
 name = "key-value-storage"
 version = "0.1.0"
-source = "git+https://github.com/openanolis/trustee/?rev=0215708b020f6e668c37ffedb510603f38b87dfb#0215708b020f6e668c37ffedb510603f38b87dfb"
+source = "git+https://github.com/openanolis/trustee/?rev=3c138563ae76e2a074e7611a68f1715653233f47#3c138563ae76e2a074e7611a68f1715653233f47"
 dependencies = [
  "async-trait",
  "derivative",
@@ -6506,16 +6485,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "redox_users"
-version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60dc65c0ff1a7ae1294b0c67b9f14baf70b644404010370171787bfac1038fc0"
-dependencies = [
- "libredox",
- "thiserror 2.0.21",
-]
-
-[[package]]
 name = "ref-cast"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6538,7 +6507,7 @@ dependencies = [
 [[package]]
 name = "reference-value-provider-service"
 version = "0.1.0"
-source = "git+https://github.com/openanolis/trustee/?rev=0215708b020f6e668c37ffedb510603f38b87dfb#0215708b020f6e668c37ffedb510603f38b87dfb"
+source = "git+https://github.com/openanolis/trustee/?rev=3c138563ae76e2a074e7611a68f1715653233f47#3c138563ae76e2a074e7611a68f1715653233f47"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7478,7 +7447,7 @@ dependencies = [
  "bitflags 1.3.2",
  "byteorder",
  "codicon",
- "dirs 5.0.1",
+ "dirs",
  "hex",
  "iocuddle",
  "lazy_static",
@@ -7486,27 +7455,6 @@ dependencies = [
  "serde",
  "serde-big-array",
  "serde_bytes",
- "static_assertions",
- "uuid",
-]
-
-[[package]]
-name = "sev"
-version = "7.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2ff74d7e7d1cc172f3a45adec74fbeee928d71df095b85aaaf66eb84e1e31e6"
-dependencies = [
- "base64 0.22.1",
- "bitfield 0.19.5",
- "bitflags 2.13.2",
- "byteorder",
- "dirs 6.0.0",
- "hex",
- "iocuddle",
- "lazy_static",
- "libc",
- "serde",
- "serde-big-array",
  "static_assertions",
  "uuid",
 ]
@@ -9249,7 +9197,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 [[package]]
 name = "verifier"
 version = "0.1.0"
-source = "git+https://github.com/openanolis/trustee/?rev=0215708b020f6e668c37ffedb510603f38b87dfb#0215708b020f6e668c37ffedb510603f38b87dfb"
+source = "git+https://github.com/openanolis/trustee/?rev=3c138563ae76e2a074e7611a68f1715653233f47#3c138563ae76e2a074e7611a68f1715653233f47"
 dependencies = [
  "anyhow",
  "asn1-rs",
@@ -9280,8 +9228,7 @@ dependencies = [
  "scroll 0.11.0",
  "serde",
  "serde_json",
- "sev 4.0.0",
- "sev 7.1.0",
+ "sev",
  "sha1",
  "sha2",
  "shadow-rs 0.19.0",

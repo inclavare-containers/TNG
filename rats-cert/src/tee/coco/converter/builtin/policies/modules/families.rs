@@ -290,6 +290,31 @@ pub(super) fn measurement_key(module: &Module) -> Option<String> {
     Some(family.measurement_key(name))
 }
 
+/// The canonical module-entry spelling of a measurement entry, used as the
+/// diagnostic `check` name. `None` for a posture or transparency entry, which
+/// has no family.
+pub(super) fn canonical_spelling_of_module(module: &Module) -> Option<String> {
+    let family = family_of_module(module)?;
+    let name = measurement_name(module)?;
+    Some(family.canonical_spelling(name))
+}
+
+/// The value(s) a measurement entry pins, rendered as a Rego literal for a
+/// diagnostic `expected`. A container image pins a digest set; every other
+/// family pins one value.
+pub(super) fn expected_value(module: &Module) -> Option<String> {
+    if let Module::ContainerImage { digests, .. } = module {
+        let inner = digests
+            .iter()
+            .map(|digest| format!("{digest:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Some(format!("[{inner}]"));
+    }
+    let pin = measurement_pin(module)?;
+    Some(format!("{pin:?}"))
+}
+
 /// The pinned value a single-valued measurement module entry compares against.
 fn measurement_pin(module: &Module) -> Option<&str> {
     match module {
