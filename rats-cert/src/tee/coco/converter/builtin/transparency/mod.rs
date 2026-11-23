@@ -32,8 +32,9 @@ pub(crate) struct RekorBaseline {
 pub(crate) enum VerifyOutcome {
     /// The manifest verified against the log.
     Verified,
-    /// The artifact server explicitly revoked the measurement.
-    Revoked,
+    /// The artifact server explicitly revoked the measurement. The SDK message
+    /// that proved the revocation rides along so the diagnostic can show it.
+    Revoked { detail: String },
 }
 
 /// Load the baseline a rekor-v1 primary bakes into Rego at policy-load time.
@@ -293,7 +294,17 @@ mod tests {
         let outcome = verify_manifest(&manifest, &service, &TransparencyCaches::new())
             .await
             .expect("a revocation is not an error");
-        assert!(matches!(outcome, VerifyOutcome::Revoked), "{outcome:?}");
+        assert!(
+            matches!(outcome, VerifyOutcome::Revoked { .. }),
+            "{outcome:?}"
+        );
+        let VerifyOutcome::Revoked { detail } = outcome else {
+            unreachable!("checked above")
+        };
+        assert!(
+            detail.contains("measurement_revoked"),
+            "the revocation message must name the server error: {detail}"
+        );
     }
 
     /// Any other artifact-server failure is an ordinary error.

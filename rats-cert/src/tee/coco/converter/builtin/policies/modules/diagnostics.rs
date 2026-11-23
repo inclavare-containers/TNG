@@ -120,8 +120,19 @@ pub(super) fn measurement_diag_rules(
 /// Its baseline is the manifest recorded in the transparency log, not a value
 /// from this config, so the diagnostic carries no `expected`/`actual`: the
 /// logged manifest is not ours to disclose, and reporting it would bloat the
-/// token. The reason alone still separates a mismatch from a missing check.
-pub(super) fn transparency_log_diag_rules(pred: &str, diag: &str, dimension: &str) -> String {
+/// token. The reason separates a revocation from an ordinary failure, and
+/// `detail` (artifact-server primary only) carries the server's message.
+pub(super) fn transparency_log_diag_rules(
+    pred: &str,
+    diag: &str,
+    dimension: &str,
+    reason: &str,
+    detail: Option<&str>,
+) -> String {
+    let detail_field = match detail {
+        Some(detail) => format!(",\n\t\"detail\": {detail}"),
+        None => String::new(),
+    };
     format!(
         r#"{diag} := {{
 	"dimension": {dimension:?},
@@ -135,7 +146,7 @@ pub(super) fn transparency_log_diag_rules(pred: &str, diag: &str, dimension: &st
 	"dimension": {dimension:?},
 	"check": "transparency_log",
 	"matched": false,
-	"reason": "transparency-log-mismatch",
+	"reason": {reason}{detail_field}
 }} if {{
 	not {pred}
 }}"#
@@ -1278,6 +1289,10 @@ mod tests {
         assert_eq!(check["dimension"], "executables");
         assert_eq!(check["check"], "transparency_log");
         assert_eq!(check["reason"], "transparency-log-mismatch");
+        assert!(
+            check.get("detail").is_none(),
+            "a rekor-v1 primary has no server message to report: {check:?}"
+        );
         assert!(check.get("matched").is_none(), "{check:?}");
         assert!(check.get("expected").is_none(), "{check:?}");
         assert!(check.get("actual").is_none(), "{check:?}");

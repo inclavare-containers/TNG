@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `modules` policies accept multiple digests for one container image repository: the same `com.alibabacloud.container.image.<repo>` type may appear more than once in one group, and the digests reported by the evidence must equal the configured digest set exactly, so an extra or a missing digest fails the entry. Existing single-digest configurations behave as before.
 - A `transparency_log` entry also compares container image digest sets: the logged manifest may contain a `container.image.<repo>` type once per digest, the evidence digest set must equal the manifest's set, and `publishedMeasurements` still lists each type once.
 - A non-affirming `modules` appraisal now reports the failed checks to the verifying client: each line names the AR4SI dimension and the check, with the expected and observed values and a reason, instead of only the dimension verdict.
+- A failed `transparency_log` check says whether the artifact server revoked the measurement or failed, and carries the server's error message (and the rekor fallback's) in a new `detail` field.
 
 ### Removed
 

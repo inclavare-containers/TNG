@@ -447,12 +447,13 @@ pub(super) fn render_modules_policy(groups: &[Vec<Module>]) -> anyhow::Result<St
                 Module::TransparencyLog { config, resolved } => {
                     families.extend_published_types(&config.published_measurements);
                     let prefix = format!("t_{gi}_{j}");
-                    let mut rules = transparency_log::build_entry_rules(
+                    let rendered = transparency_log::build_entry_rules(
                         config,
                         resolved.as_ref(),
                         &pred,
                         &prefix,
                     )?;
+                    let mut rules = rendered.rules;
                     // A transparency_log entry gates every dimension its
                     // published types imply, so it emits one diagnostic per
                     // gated dimension.
@@ -464,6 +465,8 @@ pub(super) fn render_modules_policy(groups: &[Vec<Module>]) -> anyhow::Result<St
                             &pred,
                             &name,
                             dimension.as_str(),
+                            &rendered.failure_reason_rule,
+                            rendered.failure_detail_rule.as_deref(),
                         ));
                         names.push(name);
                     }

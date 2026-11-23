@@ -356,6 +356,35 @@ mod tests {
     }
 
     #[test]
+    fn diagnostics_extension_carries_detail() {
+        let mut submod = legacy_submod("contraindicated", "policy");
+        submod[APPRAISAL_DIAGNOSTICS_EXTENSION] = json!(
+            "{\"failed\":[{\"dimension\":\"executables\",\"check\":\"transparency_log\",\
+             \"reason\":\"transparency-log-revoked\",\
+             \"detail\":\"artifact server: measurement_revoked: the measurement was revoked (http 403)\"}]}"
+        );
+
+        let error = not_affirming_error(&submod);
+        match &error {
+            Error::EarStatusNotAffirmingWithDiagnostics { diagnostics, .. } => {
+                assert_eq!(diagnostics.failed[0].check, "transparency_log");
+                assert_eq!(
+                    diagnostics.failed[0].detail.as_deref(),
+                    Some(
+                        "artifact server: measurement_revoked: the measurement was revoked (http 403)"
+                    )
+                );
+            }
+            other => panic!("expected structured diagnostics error, got {other:?}"),
+        }
+        let rendered = error.to_string();
+        assert!(
+            rendered.contains("detail artifact server: measurement_revoked"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
     fn diagnostics_extension_is_layout_independent() {
         let mut submod = draft04_submod("contraindicated", &["default"]);
         submod[APPRAISAL_DIAGNOSTICS_EXTENSION] = json!(diagnostics_payload());

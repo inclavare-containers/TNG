@@ -18,7 +18,7 @@ use super::super::test_fixtures::{
     td_payload_event, tdx_input, tdx_input_full, tdx_input_with_body, transparency_entry,
     uki_event, ALIBABA_CLOUD_CMAAS_PUBLISHER_KEY_PEM, TDX_VENDOR_ID,
 };
-use super::test_harness::{eval_policy_vector, render_modules_json, resolved_from_manifest};
+use super::test_harness::{eval_policy, render_modules_json, resolved_from_manifest};
 use serde_json::{json, Value};
 
 type Vector = (i8, i8, i8, i8);
@@ -793,12 +793,15 @@ async fn corpus_matches_expected_trust_vectors() {
         .filter(|case| !matches!(&case.policy, PolicySpec::Artifact { .. }))
     {
         let policy = render_case(&case);
-        let actual = eval_policy_vector(&policy, &case.input.to_string()).await;
+        let (actual, extensions) = eval_policy(&policy, &case.input.to_string()).await;
         assert_eq!(
             actual, case.expected,
             "corpus case {:?} changed; a semantic refactor must keep the expected vector",
             case.name
         );
+        if let Some(expected) = expected_extension(case.name) {
+            assert_extension(case.name, &extensions, &expected);
+        }
     }
 }
 
@@ -842,12 +845,109 @@ async fn corpus_artifact_server_cases() {
         }
         let entry: Value = serde_json::from_str(&text).expect("render artifact entry");
         let policy = render_modules_json(json!([transparency_entry(entry)]), &[None]);
-        let actual = eval_policy_vector(&policy, &artifact_input).await;
+        let (actual, extensions) = eval_policy(&policy, &artifact_input).await;
         assert_eq!(
             actual, case.expected,
             "artifact-server corpus case {:?} changed",
             case.name
         );
+        let expected = expected_extension(case.name)
+            .unwrap_or_else(|| panic!("artifact-server case {:?} pins no diagnostics", case.name));
+        assert_extension(case.name, &extensions, &expected);
+    }
+}
+
+/// The diagnostics a case must report. For the non-artifact corpus an unlisted
+/// case is not checked, because its diagnostics are covered by the modules unit
+/// tests; every artifact-server case is listed, so a new one cannot skip the
+/// check silently.
+enum ExpectedExtension {
+    /// The appraisal is affirming, so no extension is emitted.
+    Absent,
+    /// One failing `transparency_log` row per gated dimension.
+    Transparency {
+        reason: &'static str,
+        /// Substrings the `detail` must contain; `None` means the row must
+        /// carry no `detail` at all.
+        detail: Option<&'static [&'static str]>,
+    },
+}
+
+fn expected_extension(case: &str) -> Option<ExpectedExtension> {
+    match case {
+        "transparency/artifact-primary-resolved"
+        | "transparency/artifact-primary-fail-fallback-resolved" => Some(ExpectedExtension::Absent),
+        "transparency/artifact-primary-fail-no-fallback" => Some(ExpectedExtension::Transparency {
+            reason: "transparency-log-failed",
+            detail: Some(&["unexpected response: http 500 with unexpected body: upstream error"]),
+        }),
+        "transparency/artifact-primary-revoked" => Some(ExpectedExtension::Transparency {
+            reason: "transparency-log-revoked",
+            detail: Some(&["measurement_revoked"]),
+        }),
+        "transparency/artifact-both-fail" => Some(ExpectedExtension::Transparency {
+            reason: "transparency-log-failed",
+            detail: Some(&["artifact server:", "rekor fallback:"]),
+        }),
+        "transparency/rekor-wrong-payload-hash" => Some(ExpectedExtension::Transparency {
+            reason: "transparency-log-mismatch",
+            detail: None,
+        }),
+        _ => None,
+    }
+}
+
+/// Check the `tng.appraisal-diagnostics` extension a case produced against its
+/// pinned expectation: one failed `transparency_log` row on `executables` with
+/// the pinned reason, and the pinned substrings in `detail`.
+fn assert_extension(case: &str, extensions: &Option<Value>, expected: &ExpectedExtension) {
+    let ExpectedExtension::Transparency { reason, detail } = expected else {
+        assert!(
+            extensions.is_none(),
+            "case {case:?} is affirming and must emit no diagnostics: {extensions:?}"
+        );
+        return;
+    };
+    let extensions = extensions
+        .as_ref()
+        .unwrap_or_else(|| panic!("case {case:?} must emit the diagnostics extension"));
+    let entries = extensions
+        .as_array()
+        .unwrap_or_else(|| panic!("case {case:?}: extensions is an array: {extensions}"));
+    let extension = entries
+        .iter()
+        .find(|e| e["name"] == crate::tee::coco::diagnostics::APPRAISAL_DIAGNOSTICS_EXTENSION)
+        .unwrap_or_else(|| panic!("case {case:?}: diagnostics extension present: {entries:?}"));
+    let payload: Value = serde_json::from_str(
+        extension["value"]
+            .as_str()
+            .unwrap_or_else(|| panic!("case {case:?}: diagnostics value is a json string")),
+    )
+    .unwrap_or_else(|err| panic!("case {case:?}: payload parses: {err}"));
+    let failed = payload["failed"]
+        .as_array()
+        .unwrap_or_else(|| panic!("case {case:?}: failed is an array: {payload}"));
+    assert_eq!(failed.len(), 1, "case {case:?}: {failed:?}");
+    let row = &failed[0];
+    assert_eq!(row["dimension"], "executables", "case {case:?}: {row}");
+    assert_eq!(row["check"], "transparency_log", "case {case:?}: {row}");
+    assert_eq!(row["reason"], *reason, "case {case:?}: {row}");
+    match detail {
+        None => assert!(
+            row.get("detail").is_none(),
+            "case {case:?} must carry no detail: {row}"
+        ),
+        Some(substrings) => {
+            let detail = row["detail"]
+                .as_str()
+                .unwrap_or_else(|| panic!("case {case:?} must carry a detail: {row}"));
+            for substring in *substrings {
+                assert!(
+                    detail.contains(substring),
+                    "case {case:?}: detail {detail:?} must contain {substring:?}"
+                );
+            }
+        }
     }
 }
 

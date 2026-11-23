@@ -33,6 +33,10 @@ pub struct AppraisalDiagnostic {
     pub actual: Option<serde_json::Value>,
     #[serde(default)]
     pub reason: Option<String>,
+    /// Free-form cause reported by the policy, e.g. the artifact server's
+    /// message for a failed `transparency_log` check.
+    #[serde(default)]
+    pub detail: Option<String>,
 }
 
 impl fmt::Display for AppraisalDiagnostics {
@@ -64,6 +68,9 @@ impl fmt::Display for AppraisalDiagnostic {
         if let Some(reason) = &self.reason {
             write!(f, ", reason {reason}")?;
         }
+        if let Some(detail) = &self.detail {
+            write!(f, ", detail {detail}")?;
+        }
         Ok(())
     }
 }
@@ -94,11 +101,37 @@ mod tests {
         let diagnostics: AppraisalDiagnostics =
             serde_json::from_str(payload).expect("diagnostics payload parses");
         assert_eq!(diagnostics.failed.len(), 2);
+        assert_eq!(diagnostics.failed[0].detail, None);
         assert_eq!(
             diagnostics.to_string(),
             "- [executables] com.alibabacloud.container.image.vllm, \
              expected \"sha256:85a7\", actual [\"sha256:95a7\"], reason mismatch\n\
              - [hardware] tdx, reason platform-not-recognized"
+        );
+    }
+
+    #[test]
+    fn detail_round_trips_and_renders() {
+        let payload = r#"{
+            "failed": [
+                {
+                    "dimension": "executables",
+                    "check": "transparency_log",
+                    "reason": "transparency-log-revoked",
+                    "detail": "artifact server: measurement_revoked: the measurement was revoked (http 403)"
+                }
+            ]
+        }"#;
+        let diagnostics: AppraisalDiagnostics =
+            serde_json::from_str(payload).expect("diagnostics payload parses");
+        assert_eq!(
+            diagnostics.failed[0].detail.as_deref(),
+            Some("artifact server: measurement_revoked: the measurement was revoked (http 403)")
+        );
+        assert_eq!(
+            diagnostics.to_string(),
+            "- [executables] transparency_log, reason transparency-log-revoked, \
+             detail artifact server: measurement_revoked: the measurement was revoked (http 403)"
         );
     }
 
@@ -111,6 +144,7 @@ mod tests {
         assert_eq!(diagnostics.failed[0].expected, None);
         assert_eq!(diagnostics.failed[0].actual, None);
         assert_eq!(diagnostics.failed[0].reason, None);
+        assert_eq!(diagnostics.failed[0].detail, None);
 
         let empty: AppraisalDiagnostics = serde_json::from_str("{}").expect("default failed list");
         assert_eq!(empty.failed, Vec::new());
@@ -126,6 +160,7 @@ mod tests {
                 expected: Some(json!("debug bit clear")),
                 actual: Some(json!("0100001000000000")),
                 reason: Some("mismatch".to_string()),
+                detail: Some("artifact server: upstream error".to_string()),
             }],
         };
         let value = serde_json::to_value(&diagnostics).expect("serialize");
@@ -136,7 +171,8 @@ mod tests {
                 "check": "tdx.debug",
                 "expected": "debug bit clear",
                 "actual": "0100001000000000",
-                "reason": "mismatch"
+                "reason": "mismatch",
+                "detail": "artifact server: upstream error"
             }]})
         );
     }

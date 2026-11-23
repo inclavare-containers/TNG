@@ -109,6 +109,8 @@ failed checks:
 
 A non-affirming appraisal discloses the pinned `expected` values to the verifying side, so do not pin secrets in allow lists.
 
+A `transparency_log` row reports `transparency-log-mismatch` when the logged manifest does not match, `transparency-log-revoked` when the artifact server explicitly revoked the measurement, and `transparency-log-failed` for any other artifact-server failure. For an artifact-server primary the row also carries a `detail` with the server's message, plus the rekor fallback's message when a fallback is configured and fails as well.
+
 The other bundled templates report only the status and the trustworthiness vector.
 
 ## Configuration errors

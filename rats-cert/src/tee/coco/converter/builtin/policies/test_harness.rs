@@ -150,6 +150,47 @@ pub(crate) async fn eval_policy_vector(policy: &str, input: &str) -> (i8, i8, i8
     )
 }
 
+/// Evaluate the four AR4SI trust-vector values and `data.policy.extensions` in
+/// ONE engine run. A transparency policy calls host functions from its rules;
+/// querying the vector and the extensions separately would run them twice (and
+/// hit the mock servers twice), so the contract tests use this.
+pub(in crate::tee::coco::converter::builtin::policies) async fn eval_policy(
+    policy: &str,
+    input: &str,
+) -> ((i8, i8, i8, i8), Option<Value>) {
+    let mut result = evaluate_rules(
+        policy,
+        input,
+        vec![
+            "executables".to_string(),
+            "hardware".to_string(),
+            "configuration".to_string(),
+            "file_system".to_string(),
+            "extensions".to_string(),
+        ],
+    )
+    .await;
+    let get = |name: &str| -> i8 {
+        result
+            .get(name)
+            .and_then(|v| v.as_i64())
+            .and_then(|n| i8::try_from(n).ok())
+            .unwrap_or_else(|| panic!("policy did not produce a value for {name}"))
+    };
+    let vector = (
+        get("executables"),
+        get("hardware"),
+        get("configuration"),
+        get("file_system"),
+    );
+    // An undefined complete rule reaches the rule map as regorus's undefined
+    // sentinel rather than being omitted.
+    let extensions = result
+        .remove("extensions")
+        .filter(|value| *value != Value::String("<undefined>".to_string()));
+    (vector, extensions)
+}
+
 /// Evaluate `data.policy.extensions` for `policy` over `input`. Returns `None`
 /// when the policy defines no `extensions` rule or the rule is undefined,
 /// which is how a successful appraisal leaves the token unchanged.

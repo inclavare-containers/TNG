@@ -109,6 +109,8 @@ failed checks:
 
 评定未通过时，诊断信息会把固定的期望值（`expected`）发送给校验端，因此不要在允许列表中固定机密信息。
 
+`transparency_log` 行在日志记录的清单与证据不符时报 `transparency-log-mismatch`，artifact server 明确吊销该度量时报 `transparency-log-revoked`，artifact server 的其他失败报 `transparency-log-failed`。以 artifact server 为主服务时，该行还会带 `detail`，内容是服务端返回的消息；配置了 rekor 回退且回退也失败时，`detail` 同时包含回退的消息。
+
 `modules` 以外的内置模板只报告状态与信任度向量。
 
 ## 配置错误
