@@ -116,3 +116,94 @@ async fn test_ohttp_forwarded_over_tls() -> Result<()> {
 
     Ok(())
 }
+
+/// Native TLS on egress OHTTP (`ohttp.tls` with `cert_file` and `key_file`):
+/// ingress connects directly over HTTPS to the egress with no external
+/// TLS-terminating proxy, so `forward_client_ip` observes and injects the
+/// ingress node's real IP (`192.168.1.253`) into `X-Real-IP` / `X-Forwarded-For`.
+#[serial]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+async fn test_egress_native_ohttp_tls_preserves_client_ip() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let ca_path = dir.path().join("ca.pem");
+    let cert_path = dir.path().join("egress.crt");
+    let key_path = dir.path().join("egress.key");
+    std::fs::write(&ca_path, tls_fixtures::CA_CERT_PEM)?;
+    std::fs::write(&cert_path, tls_fixtures::SERVER_CERT_PEM)?;
+    std::fs::write(&key_path, tls_fixtures::SERVER_KEY_PEM)?;
+
+    let ca_path_json = serde_json::to_string(&ca_path.to_string_lossy().as_ref())?;
+    let cert_path_json = serde_json::to_string(&cert_path.to_string_lossy().as_ref())?;
+    let key_path_json = serde_json::to_string(&key_path.to_string_lossy().as_ref())?;
+
+    run_test!(vec![
+        TngInstance::TngServer(Box::leak(
+            format!(
+                r#"
+                {{
+                    "add_egress": [
+                        {{
+                            "mapping": {{
+                                "in": {{ "host": "0.0.0.0", "port": 20001 }},
+                                "out": {{ "host": "127.0.0.1", "port": 30001 }}
+                            }},
+                            "ohttp": {{
+                                "tls": {{
+                                    "cert_file": {cert_path_json},
+                                    "key_file": {key_path_json}
+                                }}
+                            }},
+                            "no_ra": true
+                        }}
+                    ]
+                }}
+                "#
+            )
+            .into_boxed_str(),
+        ))
+        .boxed(),
+        TngInstance::TngClient(Box::leak(
+            format!(
+                r#"
+                {{
+                    "add_ingress": [
+                        {{
+                            "mapping": {{
+                                "in": {{ "host": "0.0.0.0", "port": 10001 }},
+                                "out": {{ "host": "192.168.1.1", "port": 20001 }}
+                            }},
+                            "ohttp": {{
+                                "tls": true,
+                                "tls_ca_certs": [{ca_path_json}]
+                            }},
+                            "no_ra": true
+                        }}
+                    ]
+                }}
+                "#
+            )
+            .into_boxed_str(),
+        ))
+        .boxed(),
+        AppType::HttpServerWithHeaders {
+            port: 30001,
+            expected_host_header: "example.com",
+            expected_path_and_query: "/native-tls/tunnel?q=1",
+            expected_request_headers: vec![
+                ("x-real-ip", "192.168.1.253"),
+                ("x-forwarded-for", "192.168.1.253"),
+            ],
+        }
+        .boxed(),
+        AppType::HttpClient {
+            host: "127.0.0.1",
+            port: 10001,
+            host_header: "example.com",
+            path_and_query: "/native-tls/tunnel?q=1",
+        }
+        .boxed(),
+    ])
+    .await?;
+
+    Ok(())
+}

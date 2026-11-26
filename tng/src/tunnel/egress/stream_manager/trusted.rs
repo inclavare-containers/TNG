@@ -48,7 +48,7 @@ impl EgressProtocol {
 }
 
 pub struct TrustedStreamManager {
-    transport_layer: TransportLayer,
+    transport_layer: Arc<TransportLayer>,
 
     protocol: EgressProtocol,
 
@@ -110,10 +110,10 @@ impl TrustedStreamManager {
         };
 
         Ok(Self {
-            transport_layer: TransportLayer::new(
+            transport_layer: Arc::new(TransportLayer::new(
                 common_args.direct_forward.clone(),
                 &common_args.ohttp,
-            )?,
+            )?),
             protocol,
             runtime,
         })
@@ -137,65 +137,100 @@ impl TrustedStreamManager {
         connector: &Arc<UpstreamConnector>,
         forward_runtime: TokioRuntime,
     ) -> Result<()> {
-        let maybe_direct_forward = self
-            .transport_layer
-            .check_direct_forward(in_stream, self.runtime.clone())
-            .await
-            .context("Failed to decode stream")?;
+        match &self.protocol {
+            // OHTTP claims the whole connection on the dedicated OHTTP runtime.
+            // When native TLS (`ohttp.tls`) is enabled, terminate TLS before
+            // `direct_forward` HTTP inspection so HTTPS direct-forward requests
+            // are inspected as decrypted HTTP rather than raw TLS ClientHello bytes.
+            EgressProtocol::OHttp(security_layer) => {
+                let security_layer = security_layer.clone();
+                let connector = Arc::clone(connector);
+                let transport_layer = Arc::clone(&self.transport_layer);
+                let runtime = self.runtime.clone();
+                let handle = self.runtime.spawn_supervised_task(async move {
+                    let decrypted_or_plain = if security_layer.has_tls() {
+                        match security_layer.accept_tls(in_stream).await {
+                            Ok(stream) => stream,
+                            Err(error) => {
+                                report_downstream_failure!(
+                                    connector,
+                                    error,
+                                    OHTTP_FAILURE_MESSAGE
+                                );
+                                return;
+                            }
+                        }
+                    } else {
+                        in_stream
+                    };
 
-        match maybe_direct_forward {
-            MaybeDirectlyForward::ContinueAsTngTraffic(stream) => match &self.protocol {
-                // OHTTP claims the whole connection at the same level as a
-                // direct-forward match claims its plain stream: the security
-                // layer serves the outer HTTP and forwards each decrypted
-                // request to the backend itself, dialling through
-                // `connector`.
-                EgressProtocol::OHttp(security_layer) => {
-                    let security_layer = security_layer.clone();
-                    // The spawned task outlives this call, so it takes its own
-                    // handle.
-                    let connector = Arc::clone(connector);
-                    let handle = self.runtime.spawn_supervised_task(async move {
-                        if let Err(error) = security_layer
-                            .handle_stream(stream, Arc::clone(&connector), peer)
+                    let maybe_direct_forward = if transport_layer.has_direct_forward() {
+                        match transport_layer
+                            .check_direct_forward(decrypted_or_plain, runtime)
                             .await
                         {
-                            report_downstream_failure!(connector, error, OHTTP_FAILURE_MESSAGE);
+                            Ok(res) => res,
+                            Err(error) => {
+                                let error = error.context("Failed to decode stream");
+                                report_downstream_failure!(
+                                    connector,
+                                    error,
+                                    OHTTP_FAILURE_MESSAGE
+                                );
+                                return;
+                            }
                         }
-                    });
-                    // Isolation stays on the dedicated runtime; awaiting the
-                    // task is what makes the dispatch own the connection for
-                    // its whole lifetime. A cancelled or panicked handler has
-                    // nothing left to report: its errors were logged inside.
-                    let _ = handle.await;
-                    Ok(())
-                }
-                EgressProtocol::RatsTls(handler) => {
-                    handler
-                        .handle_stream(stream, peer, Arc::clone(connector), forward_runtime)
-                        .await
-                }
-            },
-            MaybeDirectlyForward::DirectlyForward(stream) => {
-                // Protocol-level direct forward: determined by TransportLayer.
-                // The first bytes of the stream are inspected as HTTP; if the
-                // path matches a configured direct_forward regex
-                // (common_args.direct_forward_rules), the request bypasses
-                // OHTTP decryption entirely and is forwarded as plain HTTP to
-                // upstream.
-                //
-                // This is a per-request decision, distinct from the
-                // transport-level decision in the flow. A connection can pass
-                // the transport-level IP/ifname check (encrypted=true,
-                // entering the trusted path) yet still have its first bytes
-                // match a direct_forward rule and be pumped as-is here.
-                if let Err(error) = connector
-                    .connect_and_forward_bytes(stream, false, false)
-                    .await
-                {
-                    tracing::error!(?error, "Failed to forward stream");
-                }
+                    } else {
+                        MaybeDirectlyForward::ContinueAsTngTraffic(decrypted_or_plain)
+                    };
+
+                    match maybe_direct_forward {
+                        MaybeDirectlyForward::ContinueAsTngTraffic(stream) => {
+                            if let Err(error) = security_layer
+                                .handle_http_stream(stream, Arc::clone(&connector), peer)
+                                .await
+                            {
+                                report_downstream_failure!(
+                                    connector,
+                                    error,
+                                    OHTTP_FAILURE_MESSAGE
+                                );
+                            }
+                        }
+                        MaybeDirectlyForward::DirectlyForward(stream) => {
+                            if let Err(error) =
+                                connector.connect_and_forward_bytes(stream, false, false).await
+                            {
+                                tracing::error!(?error, "Failed to forward stream");
+                            }
+                        }
+                    }
+                });
+                let _ = handle.await;
                 Ok(())
+            }
+            EgressProtocol::RatsTls(handler) => {
+                let maybe_direct_forward = self
+                    .transport_layer
+                    .check_direct_forward(in_stream, self.runtime.clone())
+                    .await
+                    .context("Failed to decode stream")?;
+
+                match maybe_direct_forward {
+                    MaybeDirectlyForward::ContinueAsTngTraffic(stream) => {
+                        handler
+                            .handle_stream(stream, peer, Arc::clone(connector), forward_runtime)
+                            .await
+                    }
+                    MaybeDirectlyForward::DirectlyForward(stream) => {
+                        if let Err(error) =
+                            connector.connect_and_forward_bytes(stream, false, false).await
+                        {
+                            tracing::error!(?error, "Failed to forward stream");
+                        }
+                        Ok(())
+                    }
+                }
             }
         }
     }

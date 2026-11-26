@@ -1186,6 +1186,7 @@ OHTTP 加密后的 HTTP 请求遵循以下规则，以便与 L7 负载均衡器�
 | `key` | [KeyConfig](#密钥管理) | 无 | 密钥管理配置（见下方 [密钥管理](#密钥管理)） |
 | `forward_client_ip` | bool | `true` | 为 `true` 时，egress 在转发解密后的内层请求给上游前，注入 `X-Real-IP`（设为直连 TCP 对端）与 `X-Forwarded-For`（追加直连对端）。直连对端是投递 OHTTP POST 的一方，在 relay 拓扑里即 relay，而非真实客户端。设为 `false` 关闭。 |
 | `aead_suites` | array [string] | `["aes128_gcm", "aes256_gcm", "chacha20_poly1305"]` | 广告并接受的 HPKE AEAD 套件。详见下文 `aead_suites`。 |
+| `tls` | object | 无 | 可选的原生 TLS 监听配置（`cert_file`、`key_file`），用于在 egress OHTTP 服务端直接终结 TLS。 |
 
 > [!NOTE]
 > `allow_non_tng_traffic_regexes` 在 2.2.4+ 已弃用，请使用 `direct_forward` 替代。
@@ -1269,6 +1270,25 @@ OHTTP 加密后的 HTTP 请求遵循以下规则，以便与 L7 负载均衡器�
 
 下发限制策略前，先升级 egress 和预期客户端到支持目标套件的版本。仍缓存改动前 key config 的客户端会被拒绝，直到重新拉取；422 响应会在其下一次请求时触发重新拉取。
 
+
+#### `tls`（可选，object）
+
+为 egress OHTTP 监听端配置原生 TLS 终结，使用 PEM 编码的服务端证书链与匹配的私钥文件。由 TNG 直接终结 TLS 后无需在前方部署 nginx 等 TLS 代理，从而为 `forward_client_ip` 保留直连对端（如 relay）的真实 TCP IP。
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `cert_file` | string | 是 | PEM 编码的服务端证书（或完整证书链）文件路径。 |
+| `key_file` | string | 是 | 与 `cert_file` 匹配的 PEM 编码私钥文件路径。 |
+
+示例：
+```json
+"ohttp": {
+    "tls": {
+        "cert_file": "/etc/tng/egress.crt",
+        "key_file": "/etc/tng/egress.key"
+    }
+}
+```
 
 <a name="ohttp-密钥管理"></a>
 

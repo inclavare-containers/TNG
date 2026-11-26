@@ -1197,6 +1197,7 @@ Corresponding to Ingress, enable OHTTP in `add_egress` by specifying the `ohttp`
 | `key` | [KeyConfig](#key-management) | None | Key management configuration (see [Key Management](#key-management) below) |
 | `forward_client_ip` | bool | `true` | When `true`, the egress injects `X-Real-IP` (set to the direct TCP peer) and `X-Forwarded-For` (append the direct peer) into the decrypted inner request before forwarding upstream. The direct peer is whoever delivered the OHTTP POST, which in the relay topology is the relay, not the real client. Set `false` to disable. |
 | `aead_suites` | array [string] | `["aes128_gcm", "aes256_gcm", "chacha20_poly1305"]` | HPKE AEAD suites to advertise and accept. See `aead_suites` below. |
+| `tls` | object | None | Optional native TLS listener configuration (`cert_file`, `key_file`) for terminating TLS directly on the egress OHTTP server. |
 
 > [!NOTE]
 > `allow_non_tng_traffic_regexes` is deprecated since 2.2.4; use `direct_forward` instead.
@@ -1285,6 +1286,25 @@ There is no fallback to the default list. An empty list or a duplicate entry is 
 In a `peer_shared` cluster, key configs are synced without filtering, so nodes with different policies advertise suites their peers reject. Configure the same `aead_suites` list on every node of the group.
 
 Roll out a restrictive policy after upgrading the egress and the expected clients to a version that supports the suite being kept. A client caching a key config from before the change is rejected until it refetches, which the 422 response drives on its next request.
+
+#### `tls` (optional, object)
+
+Configures native TLS termination on the egress OHTTP listener using a PEM-encoded server certificate chain and matching private key. Terminating TLS directly in TNG removes the need for an intermediate TLS-terminating proxy (such as nginx) and preserves the direct TCP peer IP for `forward_client_ip`.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `cert_file` | string | Yes | Path to the PEM-encoded server certificate (or full certificate chain). |
+| `key_file` | string | Yes | Path to the PEM-encoded private key matching `cert_file`. |
+
+Example:
+```json
+"ohttp": {
+    "tls": {
+        "cert_file": "/etc/tng/egress.crt",
+        "key_file": "/etc/tng/egress.key"
+    }
+}
+```
 
 <a name="ohttp-key-management"></a>
 
