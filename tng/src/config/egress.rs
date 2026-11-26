@@ -398,6 +398,32 @@ pub struct OHttpArgs {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aead_suites: Option<AeadSuites>,
+
+    /// Native TLS listener configuration for the egress OHTTP server.
+    ///
+    /// When set, the egress OHTTP listener terminates TLS directly using the
+    /// PEM certificate chain at `cert_file` and the matching private key at
+    /// `key_file`, eliminating the need for an external TLS-terminating proxy
+    /// and preserving the direct TCP peer IP for `forward_client_ip`.
+    ///
+    /// Non-wasm only.
+    #[cfg(not(wasm))]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls: Option<OHttpTlsArgs>,
+}
+
+/// Server certificate and private key paths for native TLS termination on
+/// the egress OHTTP listener.
+#[cfg(not(wasm))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct OHttpTlsArgs {
+    /// Path to the PEM-encoded server certificate (or full certificate chain).
+    pub cert_file: String,
+
+    /// Path to the PEM-encoded private key matching `cert_file`.
+    pub key_file: String,
 }
 
 impl OHttpArgs {
@@ -1013,5 +1039,58 @@ mod forward_client_ip_tests {
     fn can_disable() {
         let args: OHttpArgs = serde_json::from_str(r#"{"forward_client_ip": false}"#).unwrap();
         assert!(!args.forward_client_ip);
+    }
+
+    #[cfg(not(wasm))]
+    #[test]
+    fn ohttp_tls_defaults_none_and_skips_serialization() -> anyhow::Result<()> {
+        let args: OHttpArgs = serde_json::from_str("{}")?;
+        assert!(args.tls.is_none());
+        let rt = serde_json::to_value(&args)?;
+        assert!(rt.get("tls").is_none());
+        Ok(())
+    }
+
+    #[cfg(not(wasm))]
+    #[test]
+    fn ohttp_tls_round_trip() -> anyhow::Result<()> {
+        use crate::config::egress::OHttpTlsArgs;
+
+        let args: OHttpArgs = serde_json::from_str(
+            r#"{
+                "tls": {
+                    "cert_file": "/etc/tng/egress.crt",
+                    "key_file": "/etc/tng/egress.key"
+                }
+            }"#,
+        )?;
+        assert_eq!(
+            args.tls,
+            Some(OHttpTlsArgs {
+                cert_file: "/etc/tng/egress.crt".to_string(),
+                key_file: "/etc/tng/egress.key".to_string(),
+            })
+        );
+        let rt = serde_json::to_value(&args)?;
+        assert_eq!(rt["tls"]["cert_file"], "/etc/tng/egress.crt");
+        assert_eq!(rt["tls"]["key_file"], "/etc/tng/egress.key");
+        Ok(())
+    }
+
+    #[cfg(not(wasm))]
+    #[test]
+    fn ohttp_tls_missing_or_unknown_fields_rejected() {
+        let missing_key: Result<OHttpArgs, _> =
+            serde_json::from_str(r#"{"tls": {"cert_file": "/etc/tng/egress.crt"}}"#);
+        assert!(missing_key.is_err());
+
+        let missing_cert: Result<OHttpArgs, _> =
+            serde_json::from_str(r#"{"tls": {"key_file": "/etc/tng/egress.key"}}"#);
+        assert!(missing_cert.is_err());
+
+        let unknown_field: Result<OHttpArgs, _> = serde_json::from_str(
+            r#"{"tls": {"cert_file": "/a", "key_file": "/b", "typo": true}}"#,
+        );
+        assert!(unknown_field.is_err());
     }
 }

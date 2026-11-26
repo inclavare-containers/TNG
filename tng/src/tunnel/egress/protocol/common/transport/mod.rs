@@ -58,6 +58,10 @@ impl TransportLayer {
             direct_forward_traffic_detector,
         })
     }
+
+    pub fn has_direct_forward(&self) -> bool {
+        self.direct_forward_traffic_detector.is_some()
+    }
 }
 
 impl TransportLayer {

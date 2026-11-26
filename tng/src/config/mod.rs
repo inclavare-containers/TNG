@@ -187,6 +187,8 @@ pub mod tests {
                         }),
                         forward_client_ip: true,
                         aead_suites: None,
+                        #[cfg(not(wasm))]
+                        tls: None,
                     }),
                     rats_tls: None,
                     quic: None,
@@ -316,6 +318,8 @@ pub mod tests {
                         }),
                         forward_client_ip: true,
                         aead_suites: None,
+                        #[cfg(not(wasm))]
+                        tls: None,
                     }),
                     rats_tls: None,
                     quic: None,
@@ -370,6 +374,8 @@ pub mod tests {
                         }),
                         forward_client_ip: true,
                         aead_suites: None,
+                        #[cfg(not(wasm))]
+                        tls: None,
                     }),
                     rats_tls: None,
                     quic: None,
